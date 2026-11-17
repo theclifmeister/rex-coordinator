@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # status.sh — coordinator state, open tasks, reports waiting, research tabs
-# (with the ref@sha they read), worktrees, and
+# (with the ref@sha, or the sha, they read), worktrees, and
 # this repo's tsk board (tsk list -p <root> --json) with each task's linked
 # slug and drift flags (!): worker gone but task started, blocked with a
 # reply, review sent back, open task with no board task.
@@ -24,7 +24,7 @@ for f in "$dir"/tasks/*.block; do
   case $slug in
     research-*)
       t=${slug#research-}; report=-; [ -s "$dir/research/$t.md" ] && report="answer ready"
-      at=$(awk 'NR==1 && NF>=2 {print $1 "@" $2}' "$dir/tasks/$slug.ref" 2>/dev/null || true)
+      at=$(research_reads "$dir/tasks/$slug.ref")
       echo "  $slug  tab=$block ($alive)  reads=${at:-?}  $report" ;;
     *)
       ahead=$(git -C "$root" rev-list --count "$feature..$slug" 2>/dev/null || echo "?")

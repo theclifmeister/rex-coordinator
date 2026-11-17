@@ -18,7 +18,7 @@ if [ -s "$history" ]; then
   recent=$(grep '^- ' "$history" | tail -n 15)
   [ -z "$recent" ] || ctx="$ctx
 
-Recent coordinator history (oldest first):
+Recent coordinator history (oldest first; relative paths are under $common/rex-coordinator/):
 $recent
 
 Older entries, briefs, reports and research answers: $root/scripts/recall.sh <word> [word...]."
