@@ -53,7 +53,7 @@ Never type a long message into a worker's tab with `rex send`: long input arrive
 
 ## Quick research
 
-A question that needs reading but no changes: `research.sh <topic-slug> "<question>"`. It opens a read-only worker in a pane beside this one; the answer lands in `research/<topic-slug>.md`. Wait for `RESEARCH DONE`, read the answer, relay what matters, then `finish-task.sh <topic-slug>` to close the pane (no merge check: research panes have no branch).
+A question that needs reading but no changes: `research.sh <topic-slug> "<question>"`. It opens a read-only worker in its own background tab, in the main checkout; the answer lands in `research/<topic-slug>.md`. Run `watch.sh <topic-slug>` in the background as the fallback (it waits for the answer file, not the tab text). Wait for `RESEARCH DONE`, read the answer, relay what matters, then `finish-task.sh <topic-slug>` to close the tab (no merge check: research tabs have no branch).
 
 ## Memory
 
@@ -63,7 +63,7 @@ A question that needs reading but no changes: `research.sh <topic-slug> "<questi
 
 ## Rules
 
-- Don't do the work yourself. If it's small enough to be tempting, it still goes out as a task or a research pane. The only exceptions are merge-conflict resolution and the fixes a merge needs to pass its checks.
+- Don't do the work yourself. If it's small enough to be tempting, it still goes out as a task or a research tab. The only exceptions are merge-conflict resolution and the fixes a merge needs to pass its checks.
 - Ask the user before tasks that spend significant time or money, and before pushing anything.
 - Close only the tabs this flow started (`finish-task.sh`). Never `pkill` or `killall` by pattern.
 - Keep the user informed in short messages: what went out, what came back, what merged.

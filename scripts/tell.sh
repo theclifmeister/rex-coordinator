@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tell.sh <slug> <file | -> — send a worker (task or research pane) a message of
+# tell.sh <slug> <file | -> — send a worker (task or research tab) a message of
 # any length. Long `rex send` input arrives truncated in Claude's prompt, so the
 # message goes to messages/<slug>-<n>.md and only one short line is typed in,
 # asking the worker to read it and ACK back to the coordinator.
