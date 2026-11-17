@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# SessionStart: if this Rex pane is the repo's coordinator, tell Claude so.
+# Silent everywhere else (other panes, workers, non-git dirs, no state).
+cat >/dev/null
+[ "${CLAUDE_ROLE:-}" = worker ] && exit 0
+[ -n "${REX_BLOCK:-}" ] || exit 0
+common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || exit 0
+state="$common/rex-coordinator/state"
+[ -f "$state" ] || exit 0
+block=$(sed -n 's/^block=//p' "$state" | head -n1)
+[ "$block" = "$REX_BLOCK" ] || exit 0
+feature=$(sed -n 's/^feature=//p' "$state" | head -n1)
+root="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
+
+ctx="This Rex pane ($REX_BLOCK) is the COORDINATOR for this repo; the feature branch is '$feature'. Before replying to anything, load the rex-coordinator:coordinator skill and follow it: you only coordinate, and every task goes to a fresh worker Claude in its own Rex tab and worktree. Plugin scripts are in $root/scripts. Start by running $root/scripts/status.sh to pick up tasks from earlier sessions."
+printf '%s' "$ctx" | jq -Rs '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:.}}'
