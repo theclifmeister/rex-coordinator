@@ -2,6 +2,9 @@
 # finish-task.sh <slug> [--abandon] — after the task branch is merged into the
 # feature branch: close its tab, remove the worktree, delete the branch.
 # --abandon skips the merged check and force-deletes (only on the user's say-so).
+# A research topic (tasks/research-<slug>.block, no branch): close its tab,
+# force-remove its detached worktree .claude/worktrees/_research/<slug> and
+# drop tasks/research-<slug>.ref.
 # Appends one line per closed task to <state-dir>/history.md (the ledger).
 # Linked board task (tasks/<slug>.tsk): merged -> review on you with the merge
 # sha and summary, and the link moves to review/<slug>.tsk for board-watch.sh;
@@ -14,8 +17,17 @@ wt="$root/.claude/worktrees/$slug"
 
 # A research tab has no branch: nothing to merge, just close it.
 research=0
-[ -f "$dir/tasks/research-$slug.block" ] && [ ! -f "$dir/tasks/$slug.block" ] \
+{ [ -f "$dir/tasks/research-$slug.block" ] || [ -f "$dir/tasks/research-$slug.ref" ]; } \
+  && [ ! -f "$dir/tasks/$slug.block" ] \
   && ! git -C "$root" rev-parse --verify -q "refs/heads/$slug" >/dev/null && research=1
+research_ref=-
+if [ $research = 1 ]; then
+  wt="$root/.claude/worktrees/_research/$slug"
+  # "<ref> <sha>" -> "<ref>@<sha>"
+  [ -f "$dir/tasks/research-$slug.ref" ] \
+    && research_ref=$(awk 'NR==1 && NF>=2 {print $1 "@" $2}' "$dir/tasks/research-$slug.ref")
+  [ -n "$research_ref" ] || research_ref=-
+fi
 
 if [ "$abandon" != --abandon ] && [ $research = 0 ]; then
   git -C "$root" merge-base --is-ancestor "$slug" "$feature" \
@@ -36,7 +48,7 @@ ledger_line() {
   local status sha refs tnum
   tnum=${tsk_num:+ $tsk_num}
   if [ $research = 1 ]; then
-    status=research; sha=-
+    status=research; sha=$research_ref
     refs="research: $dir/research/$slug.md"
     echo "- $(date +%F) $slug $status $sha — $(summary_of "$dir/research/$slug.md") | $refs"
     return
@@ -61,16 +73,20 @@ entry=$(ledger_line 2>/dev/null) || entry=
 # "- <date> <slug> <status> <sha> ..." -> the sha, for the board.
 sha=$(cut -d' ' -f5 <<<"$entry"); summary=$(summary_of "$dir/reports/$slug-report.md" 2>/dev/null) || summary=
 
-for f in "$dir/tasks/$slug.block" "$dir/tasks/research-$slug.block"; do
-  [ -f "$f" ] || continue
-  rex block close "$(cat "$f")" >/dev/null 2>&1 || true
-  rm -f "$f"
-done
+# Only this slug's own tab: a task and a research topic may share a name.
+tabf="$dir/tasks/$slug.block"; [ $research = 1 ] && tabf="$dir/tasks/research-$slug.block"
+if [ -f "$tabf" ]; then
+  rex block close "$(cat "$tabf")" >/dev/null 2>&1 || true
+  rm -f "$tabf"
+fi
 
+[ $research = 0 ] || rm -f "$dir/tasks/research-$slug.ref"
 if [ -d "$wt" ]; then
   [ -L "$wt/node_modules" ] && rm "$wt/node_modules"
-  if [ "$abandon" = --abandon ]; then git -C "$root" worktree remove --force "$wt"
+  # A research worktree is detached and read-only: nothing to keep.
+  if [ "$abandon" = --abandon ] || [ $research = 1 ]; then git -C "$root" worktree remove --force "$wt"
   else git -C "$root" worktree remove "$wt"; fi
+  [ $research = 0 ] || rmdir "$(dirname "$wt")" 2>/dev/null || true
 fi
 if git -C "$root" rev-parse --verify -q "refs/heads/$slug" >/dev/null; then
   if [ "$abandon" = --abandon ]; then git -C "$root" branch -D "$slug"
