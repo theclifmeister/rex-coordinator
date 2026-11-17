@@ -15,7 +15,7 @@ Run one Rex pane as a **coordinator**: it never does the work itself, but hands 
 - `hooks/`, `hooks-handlers/session-start.sh`: the activation check.
 - `scripts/`: `start`, `stop`, `status`, `new-task`, `launch-worker`, `watch`, `research`, `tell`, `finish-task`, `recall`, `board`, `board-watch`.
 
-State is per repo, in `<git-common-dir>/rex-coordinator/` (state, briefs, reports, research answers, task-to-block map, task-to-board links). It is never committed. `history.md` there is a one-line-per-task ledger written by `finish-task`; the coordinator sees its tail at session start, and `recall` searches it with the briefs, reports and research answers. Worktrees go in `.claude/worktrees/`, which is added to `.git/info/exclude`.
+State is per repo, in `<git-common-dir>/rex-coordinator/` (state, briefs, reports, research answers, task-to-block map, task-to-board links). It is never committed. `history.md` there is a one-line-per-task ledger written by `finish-task`; the coordinator sees its tail at session start, and `recall` searches it with the briefs, reports and research answers. Worktrees go in `.claude/worktrees/`, which is added to `.git/info/exclude`. Research (`research.sh <topic> [--ref <branch|commit>] "<question>"`) reads a detached worktree in `.claude/worktrees/_research/<topic>` at the feature branch tip or the given ref, never the main checkout's working tree; `finish-task` removes it.
 
 ## tsk board
 
