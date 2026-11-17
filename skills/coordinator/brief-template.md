@@ -33,7 +33,7 @@ You are a worker, not the coordinator. Ignore any coordinator-flow instructions:
 
 ## Report back (always — also when blocked or stopping early)
 
-1. Write the report to `{{REPORT}}`:
+1. Write the report to `{{REPORT}}`. Its first line is `Summary: <one line>` (it goes into the coordinator's history), then:
    - what was done, with the commit hashes;
    - the checks run, with pass and fail counts;
    - what was not done, and why;

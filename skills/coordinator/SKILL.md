@@ -7,7 +7,7 @@ description: The Rex coordinator playbook — this pane only coordinates, handin
 
 This pane is the **coordinator**. It never does the work itself: no code edits, no builds, no test runs, beyond what it needs to brief, check and merge. Every task goes to a fresh Claude in its own Rex tab, on its own git worktree, and comes back by merge.
 
-Scripts live in `${CLAUDE_PLUGIN_ROOT}/scripts` (the SessionStart context gives the absolute path). Run them from the repo's main checkout. Per-repo state lives in `<git-common-dir>/rex-coordinator/` — `state`, `briefs/`, `reports/`, `research/`, `tasks/`, `messages/` — so it survives `/clear`, new sessions and reboots, is shared by all worktrees, and is never committed.
+Scripts live in `${CLAUDE_PLUGIN_ROOT}/scripts` (the SessionStart context gives the absolute path). Run them from the repo's main checkout. Per-repo state lives in `<git-common-dir>/rex-coordinator/` — `state`, `history.md`, `briefs/`, `reports/`, `research/`, `tasks/`, `messages/` — so it survives `/clear`, new sessions and reboots, is shared by all worktrees, and is never committed.
 
 ## On every session start, `/clear` or compaction
 
@@ -22,12 +22,13 @@ Scripts live in `${CLAUDE_PLUGIN_ROOT}/scripts` (the SessionStart context gives 
 
 ## Handing out a task
 
-1. **Worktree and brief:** `new-task.sh <task-slug>`. It creates branch `<task-slug>` and `.claude/worktrees/<task-slug>` off the feature branch (and symlinks `node_modules` if present; add other run-time needs by hand, never commit them). It writes a brief skeleton to `briefs/<task-slug>.md` with the worker line, the paths and the report-back contract already filled in.
-2. **Fill in the brief.** Replace every `{{TODO}}`: Goal, Context, Scope, the project's safety rules verbatim, and Checks. The brief is the worker's only context; write it like a handover to a capable peer.
-3. **Launch:** `launch-worker.sh <task-slug>`. It refuses while any `{{TODO}}` remains, starts `env CLAUDE_ROLE=worker claude` in a new background tab in the worktree, and prints the worker's block ID.
-4. **Fallback watch:** run `watch.sh <task-slug>` with `run_in_background`. The worker's Rex message is the main signal; this catches a worker that dies first. Never poll in the foreground.
-5. **Board:** if there is a tsk board, add or update the task with its steps and the block ID.
-6. Tell the user in a line or two what went out.
+1. **Recall first:** `recall.sh <word> [word...]` with a few key words for the task (see Memory).
+2. **Worktree and brief:** `new-task.sh <task-slug>`. It creates branch `<task-slug>` and `.claude/worktrees/<task-slug>` off the feature branch (and symlinks `node_modules` if present; add other run-time needs by hand, never commit them). It writes a brief skeleton to `briefs/<task-slug>.md` with the worker line, the paths and the report-back contract already filled in.
+3. **Fill in the brief.** Replace every `{{TODO}}`: Goal, Context (with anything `recall.sh` turned up), Scope, the project's safety rules verbatim, and Checks. The brief is the worker's only context; write it like a handover to a capable peer.
+4. **Launch:** `launch-worker.sh <task-slug>`. It refuses while any `{{TODO}}` remains, starts `env CLAUDE_ROLE=worker claude` in a new background tab in the worktree, and prints the worker's block ID.
+5. **Fallback watch:** run `watch.sh <task-slug>` with `run_in_background`. The worker's Rex message is the main signal; this catches a worker that dies first. Never poll in the foreground.
+6. **Board:** if there is a tsk board, add or update the task with its steps and the block ID.
+7. Tell the user in a line or two what went out.
 
 Several tasks may run at once if they touch different areas. Say up front where they might collide, and merge them one at a time.
 
@@ -53,6 +54,12 @@ Never type a long message into a worker's tab with `rex send`: long input arrive
 ## Quick research
 
 A question that needs reading but no changes: `research.sh <topic-slug> "<question>"`. It opens a read-only worker in a pane beside this one; the answer lands in `research/<topic-slug>.md`. Wait for `RESEARCH DONE`, read the answer, relay what matters, then `finish-task.sh <topic-slug>` to close the pane (no merge check: research panes have no branch).
+
+## Memory
+
+- **Ledger:** `finish-task.sh` appends one line per closed task to `history.md`: date, slug, `merged`/`abandoned`/`research`, merge sha, the report's `Summary:` line, and the paths of brief and report (or research answer). Briefs, reports and research answers are kept.
+- **Session start:** the SessionStart context carries the last 15 ledger lines.
+- **Recall:** `recall.sh <word> [word...]` searches the ledger, briefs, reports and research answers, case-insensitively, best matches first. Before filling a new brief, run it with a few key words and carry anything relevant (earlier decisions, failed approaches, related tasks) into the brief's Context.
 
 ## Rules
 

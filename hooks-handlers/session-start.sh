@@ -13,4 +13,14 @@ feature=$(sed -n 's/^feature=//p' "$state" | head -n1)
 root="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 
 ctx="This Rex pane ($REX_BLOCK) is the COORDINATOR for this repo; the feature branch is '$feature'. Before replying to anything, load the rex-coordinator:coordinator skill and follow it: you only coordinate, and every task goes to a fresh worker Claude in its own Rex tab and worktree. Plugin scripts are in $root/scripts. Start by running $root/scripts/status.sh to pick up tasks from earlier sessions."
+history="$common/rex-coordinator/history.md"
+if [ -s "$history" ]; then
+  recent=$(grep '^- ' "$history" | tail -n 15)
+  [ -z "$recent" ] || ctx="$ctx
+
+Recent coordinator history (oldest first):
+$recent
+
+Older entries, briefs, reports and research answers: $root/scripts/recall.sh <word> [word...]."
+fi
 printf '%s' "$ctx" | jq -Rs '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:.}}'
