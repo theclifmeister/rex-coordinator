@@ -5,7 +5,8 @@
 # A research topic (tasks/research-<slug>.block, no branch): close its tab,
 # force-remove its detached worktree .claude/worktrees/_research/<slug> and
 # drop tasks/research-<slug>.ref.
-# Appends one line per closed task to <state-dir>/history.md (the ledger).
+# Appends one line per closed task to <state-dir>/history.md (the ledger);
+# its paths are relative to the state dir (older lines hold absolute ones).
 # Linked board task (tasks/<slug>.tsk): merged -> review on you with the merge
 # sha and summary, and the link moves to review/<slug>.tsk for board-watch.sh;
 # --abandon -> a note (date, branch, last sha), then done, and the link goes.
@@ -23,9 +24,8 @@ research=0
 research_ref=-
 if [ $research = 1 ]; then
   wt="$root/.claude/worktrees/_research/$slug"
-  # "<ref> <sha>" -> "<ref>@<sha>"
-  [ -f "$dir/tasks/research-$slug.ref" ] \
-    && research_ref=$(awk 'NR==1 && NF>=2 {print $1 "@" $2}' "$dir/tasks/research-$slug.ref")
+  # "<ref> <sha>" -> "<ref>@<sha>", or just "<sha>" for a commit
+  research_ref=$(research_reads "$dir/tasks/research-$slug.ref")
   [ -n "$research_ref" ] || research_ref=-
 fi
 
@@ -49,7 +49,7 @@ ledger_line() {
   tnum=${tsk_num:+ $tsk_num}
   if [ $research = 1 ]; then
     status=research; sha=$research_ref
-    refs="research: $dir/research/$slug.md"
+    refs="research: research/$slug.md"
     echo "- $(date +%F) $slug $status $sha — $(summary_of "$dir/research/$slug.md") | $refs"
     return
   fi
@@ -62,7 +62,7 @@ ledger_line() {
     [ -n "$sha" ] || sha=$(git -C "$root" rev-parse "$feature" 2>/dev/null) || sha=-
     [ "$sha" = - ] || sha=$(git -C "$root" rev-parse --short "$sha" 2>/dev/null) || sha=-
   fi
-  refs="brief: $dir/briefs/$slug.md | report: $dir/reports/$slug-report.md"
+  refs="brief: briefs/$slug.md | report: reports/$slug-report.md"
   echo "- $(date +%F) $slug $status ${sha:--}$tnum — $(summary_of "$dir/reports/$slug-report.md") | $refs"
 }
 tsk_id='' tsk_num=''

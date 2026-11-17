@@ -14,7 +14,7 @@ found=0
 if [ -f "$dir/history.md" ]; then
   lines=$(grep -iF "${args[@]}" "$dir/history.md" | tail -n 20 || true)
   if [ -n "$lines" ]; then
-    found=1; echo "Ledger ($dir/history.md):"; printf '%s\n' "$lines" | while IFS= read -r l; do echo "  $l"; done; echo
+    found=1; echo "Ledger ($dir/history.md; relative paths are under $dir/):"; printf '%s\n' "$lines" | while IFS= read -r l; do echo "  $l"; done; echo
   fi
 fi
 

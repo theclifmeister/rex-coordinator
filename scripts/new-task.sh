@@ -2,12 +2,13 @@
 # new-task.sh <slug> [T<n>] [--title "<text>"] — branch + worktree off the
 # feature branch, and a brief skeleton to fill in. Prints the brief path.
 # Board (when tsk is installed): with T<n>, link that task (it must belong to
-# this repo and not be done); without, create one (title from --title, else
-# from the slug) and link it. The link goes to tasks/<slug>.tsk, and the
+# this repo and not be done); without, create one (--title is then required)
+# and link it. The link goes to tasks/<slug>.tsk, and the
 # board task's title, notes and steps are copied into the brief.
 source "$(dirname "$0")/lib.sh"
 require_coordinator
 slug=${1:-}; check_slug "$slug"; shift
+case $slug in research-*) die "slugs starting with 'research-' are reserved for research topics (tasks/research-<topic>.*): pick another name" ;; esac
 want='' title=''
 while [ $# -gt 0 ]; do
   case $1 in
@@ -17,6 +18,8 @@ while [ $# -gt 0 ]; do
     *) die "usage: new-task.sh <slug> [T<n>] [--title \"<text>\"] (got '$1')" ;;
   esac
 done
+[ -n "$want" ] || ! have_tsk || [ -n "$title" ] \
+  || die "no T<n> given, so a board task will be created: pass --title \"<text>\" (verb-first)"
 dir=$(state_dir); root=$(repo_root); feature=$(state_get feature)
 wt="$root/.claude/worktrees/$slug"
 brief="$dir/briefs/$slug.md"
@@ -58,7 +61,6 @@ git -C "$root" worktree add -q -b "$slug" "$wt" "$feature"
 
 # No task named: create one in this repo's project, based on the feature branch.
 if [ -z "$want" ] && have_tsk; then
-  [ -n "$title" ] || { title=${slug//[-_.]/ }; title="$(tr '[:lower:]' '[:upper:]' <<<"${title:0:1}")${title:1}"; }
   rc=0; out=$(tsk add -p "$root" -t "$title" --base "$feature" --json 2>&1) || rc=$?
   # Seen once, not reproduced: unknown-base for an existing local branch. A
   # refused add saved nothing, so add again without a base.

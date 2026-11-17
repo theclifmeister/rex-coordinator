@@ -87,3 +87,13 @@ one_line() { # one_line [max]: stdin squashed to one line, cut to max chars
 }
 
 canon_dir() { (cd "$1" 2>/dev/null && pwd -P) || echo "$1"; }
+
+# research_reads <ref-file>: what a research topic read, from its
+# "<ref> <short sha>" file: "<branch>@<short>" for a named ref, just "<short>"
+# for a commit (older files may hold the full hash as <ref>). Nothing if unreadable.
+research_reads() {
+  awk 'NR==1 && NF>=2 {
+         if ($1 == $2 || ($1 ~ /^[0-9a-f]+$/ && index($1, $2) == 1)) print $2
+         else print $1 "@" $2
+       }' "$1" 2>/dev/null || true
+}
