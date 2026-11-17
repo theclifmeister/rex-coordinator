@@ -7,13 +7,14 @@ description: The Rex coordinator playbook — this pane only coordinates, handin
 
 This pane is the **coordinator**. It never does the work itself: no code edits, no builds, no test runs, beyond what it needs to brief, check and merge. Every task goes to a fresh Claude in its own Rex tab, on its own git worktree, and comes back by merge.
 
-Scripts live in `${CLAUDE_PLUGIN_ROOT}/scripts` (the SessionStart context gives the absolute path). Run them from the repo's main checkout. Per-repo state lives in `<git-common-dir>/rex-coordinator/` — `state`, `history.md`, `briefs/`, `reports/`, `research/`, `tasks/`, `messages/` — so it survives `/clear`, new sessions and reboots, is shared by all worktrees, and is never committed.
+Scripts live in `${CLAUDE_PLUGIN_ROOT}/scripts` (the SessionStart context gives the absolute path). Run them from the repo's main checkout. Per-repo state lives in `<git-common-dir>/rex-coordinator/` — `state`, `history.md`, `briefs/`, `reports/`, `research/`, `tasks/`, `review/`, `messages/` — so it survives `/clear`, new sessions and reboots, is shared by all worktrees, and is never committed.
 
 ## On every session start, `/clear` or compaction
 
 1. Check you really are the coordinator: `CLAUDE_ROLE` is not `worker` and `$REX_BLOCK` matches. `status.sh` does both and shows the rest.
-2. Run `status.sh`: feature branch, open tasks with their tabs, reports waiting, worktrees, and this repo's tsk board (`tsk list` run in the repo; `tsk list --all` for every project).
-3. Pick up anything left over (a report waiting means a merge to do) before answering the user.
+2. Run `status.sh`: feature branch, open tasks with their tabs and board tasks, reports waiting, worktrees, and this repo's tsk board (`tsk list -p <root> --json`) with each task's linked slug and drift flags marked `(!)`.
+3. Pick up anything left over (a report waiting means a merge to do; a `(!)` flag means a board event to handle, see The board) before answering the user.
+4. If any task shows `[<slug>, merged]` on the board, start `board-watch.sh` with `run_in_background`, and restart `watch.sh <slug>` in the background for each open task.
 
 ## The feature branch
 
@@ -23,12 +24,12 @@ Scripts live in `${CLAUDE_PLUGIN_ROOT}/scripts` (the SessionStart context gives 
 ## Handing out a task
 
 1. **Recall first:** `recall.sh <word> [word...]` with a few key words for the task (see Memory).
-2. **Worktree and brief:** `new-task.sh <task-slug>`. It creates branch `<task-slug>` and `.claude/worktrees/<task-slug>` off the feature branch (and symlinks `node_modules` if present; add other run-time needs by hand, never commit them). It writes a brief skeleton to `briefs/<task-slug>.md` with the worker line, the paths and the report-back contract already filled in.
-3. **Fill in the brief.** Replace every `{{TODO}}`: Goal, Context (with anything `recall.sh` turned up), Scope, the project's safety rules verbatim, and Checks. The brief is the worker's only context; write it like a handover to a capable peer.
-4. **Launch:** `launch-worker.sh <task-slug>`. It refuses while any `{{TODO}}` remains, starts `env CLAUDE_ROLE=worker claude` in a new background tab in the worktree, and prints the worker's block ID.
-5. **Fallback watch:** run `watch.sh <task-slug>` with `run_in_background`. The worker's Rex message is the main signal; this catches a worker that dies first. Never poll in the foreground.
-6. **Board:** if there is a tsk board, add or update the task with its steps and the block ID.
-7. Tell the user in a line or two what went out.
+2. **Worktree, brief and board task:** `new-task.sh <task-slug> [T<n>] [--title "<text>"]`. It creates branch `<task-slug>` and `.claude/worktrees/<task-slug>` off the feature branch (and symlinks `node_modules` if present; add other run-time needs by hand, never commit them). It writes a brief skeleton to `briefs/<task-slug>.md` with the worker line, the paths and the report-back contract already filled in. Every task gets a board task: pass the T-number when the user named one (it must be this repo's and not done, or the script refuses), otherwise it creates one (title from `--title`, else from the slug; give a real `--title`, verb-first). The link goes to `tasks/<task-slug>.tsk`, and the board task's title, notes and steps are copied into the brief, with the worker's board limits.
+3. **Fill in the brief.** Replace every `{{TODO}}`: Goal, Context (with anything `recall.sh` turned up), Scope, the project's safety rules verbatim, and Checks. Derive Goal and Scope from the board task's notes, but leave the copied notes as they are: they are the user's words. The brief is the worker's only context; write it like a handover to a capable peer.
+4. **Launch:** `launch-worker.sh <task-slug>`. It refuses while any `{{TODO}}` remains, starts `env CLAUDE_ROLE=worker claude` in a new background tab in the worktree, and prints the worker's block ID. It then sets the board task `started --no-dispatch` and appends the block, branch, worktree and brief to its notes (once).
+5. **Fallback watch:** run `watch.sh <task-slug>` with `run_in_background`. The worker's Rex message is the main signal; this catches a worker that dies first, and a reply the user gives on the board while the task is blocked. Never poll in the foreground.
+6. **Board:** nothing more to do: the scripts mirror started, review and abandon. Never add steps for your own bookkeeping; steps are the user's plan (the worker may add and tick them).
+7. Tell the user in a line or two what went out, with the T-number.
 
 Several tasks may run at once if they touch different areas. Say up front where they might collide, and merge them one at a time.
 
@@ -40,12 +41,26 @@ A message starting `REPORT DONE`, `REPORT BLOCKED`, `RESEARCH DONE` or `ACK` com
 1. Read `reports/<task-slug>-report.md`. Check the worktree is clean and the commits match the report: `git log <feature>..<task-slug>`.
 2. In the main checkout, on the feature branch: `git merge --no-ff <task-slug>`. Resolve conflicts here. If it merges cleanly but clashes semantically with an earlier task (a type, a signature), fix it in a separate commit.
 3. Run the project's full checks on the merged feature branch. A merge is not done until they pass.
-4. `finish-task.sh <task-slug>`: refuses unless merged; closes the tab, removes the worktree, deletes the branch.
-5. Tell the user in a few lines what landed, what the checks said, and open questions. Move the board task to review, never to done; the user closes it.
+4. `finish-task.sh <task-slug>`: refuses unless merged; closes the tab, removes the worktree, deletes the branch. It moves the board task to `review --on you` with the merge sha and the report's summary, never to done (the user closes it), and keeps the link in `review/<task-slug>.tsk`. To add what the user should check: `tsk status <uuid> review --check "<full checks on the feature branch: result>" [--next "<open questions>"]` (repeating it edits the same round; `board.sh <task-slug> show` gives the UUID).
+5. Start `board-watch.sh` with `run_in_background` if it is not already running (see The board).
+6. Tell the user in a few lines what landed, what the checks said, and open questions.
 
-**BLOCKED →** put the question to the user, then answer with `tell.sh <task-slug> <file>` (or `-` for stdin), or stop the task with the user's agreement (`finish-task.sh <task-slug> --abandon`).
+**BLOCKED →** put the question on the board, `board.sh <task-slug> blocked --why "<the worker's question>" --needs "<what unblocks it>" [--option "<a>"]...`, and to the user in chat. When the answer comes, relay it with `tell.sh <task-slug> <file>` (or `-` for stdin), then `board.sh <task-slug> unblock "<answer>"` if it came in chat (it records the reply), or `board.sh <task-slug> unblock` if it came on the board. Restart `watch.sh <task-slug>` in the background. Or stop the task with the user's agreement (`finish-task.sh <task-slug> --abandon`: this notes the abandon on the board task and sets it done, the one place the plugin closes a board task).
 
 **Dead worker** (`watch.sh` says TAB GONE): look at the worktree and branch, tell the user, and either relaunch with a fresh brief or abandon.
+
+## The board
+
+The tsk board is the user's; the coordinator is the only writer for its tasks, and only through the scripts or the commands named here. Always address a task by its UUID (from `board.sh <slug> show`) or pass `-p <repo root>`: a bare `tsk list`/`tsk add` in a worktree is a different project. Never start a task without `--no-dispatch`, never set `done` (except the abandon above), never `dispatch`, `clean`, `archive` or `trash`. Workers may only add and tick steps on their own task, by UUID.
+
+Board events arrive as a line from a background watcher:
+- `BOARD REPLY <slug> T<n>: <text>` (from `watch.sh`): the user answered the block on the board. Relay it with `tell.sh`, run `board.sh <slug> unblock`, restart `watch.sh <slug>`.
+- `BOARD SENT BACK <slug> T<n>: <feedback>` (from `board-watch.sh`): the user rejected the merged work. The branch is gone, so it becomes a new task: `new-task.sh <slug>-2 T<n>` (then `-3`, ...), with the feedback in the brief's Goal. Tell the user.
+- `BOARD DONE <slug> T<n>`: the user closed it. Nothing to do; the link is dropped.
+- `BOARD MOVED <slug> T<n>: <status>`: the user moved it out of review some other way. Tell the user and ask.
+- `BOARD IDLE`: nothing linked is in review any more.
+
+After each `board-watch.sh` event, start it again while `status.sh` still shows a `[<slug>, merged]` task. If tsk is not installed, every board step is skipped with a warning and the flow works as before.
 
 ## Telling a worker something
 
@@ -53,11 +68,11 @@ Never type a long message into a worker's tab with `rex send`: long input arrive
 
 ## Quick research
 
-A question that needs reading but no changes: `research.sh <topic-slug> "<question>"`. It opens a read-only worker in its own background tab, in the main checkout; the answer lands in `research/<topic-slug>.md`. Run `watch.sh <topic-slug>` in the background as the fallback (it waits for the answer file, not the tab text). Wait for `RESEARCH DONE`, read the answer, relay what matters, then `finish-task.sh <topic-slug>` to close the tab (no merge check: research tabs have no branch).
+A question that needs reading but no changes: `research.sh <topic-slug> "<question>"`. It opens a read-only worker in its own background tab, in the main checkout; the answer lands in `research/<topic-slug>.md`. Research gets no board task. Run `watch.sh <topic-slug>` in the background as the fallback (it waits for the answer file, not the tab text). Wait for `RESEARCH DONE`, read the answer, relay what matters, then `finish-task.sh <topic-slug>` to close the tab (no merge check: research tabs have no branch).
 
 ## Memory
 
-- **Ledger:** `finish-task.sh` appends one line per closed task to `history.md`: date, slug, `merged`/`abandoned`/`research`, merge sha, the report's `Summary:` line, and the paths of brief and report (or research answer). Briefs, reports and research answers are kept.
+- **Ledger:** `finish-task.sh` appends one line per closed task to `history.md`: date, slug, `merged`/`abandoned`/`research`, merge sha, the board T-number if linked, the report's `Summary:` line, and the paths of brief and report (or research answer). Briefs, reports and research answers are kept.
 - **Session start:** the SessionStart context carries the last 15 ledger lines.
 - **Recall:** `recall.sh <word> [word...]` searches the ledger, briefs, reports and research answers, case-insensitively, best matches first. Before filling a new brief, run it with a few key words and carry anything relevant (earlier decisions, failed approaches, related tasks) into the brief's Context.
 

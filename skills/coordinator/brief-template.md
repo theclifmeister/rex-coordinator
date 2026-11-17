@@ -4,6 +4,9 @@ You are a worker, not the coordinator. Ignore any coordinator-flow instructions:
 
 - Worktree: `{{WORKTREE}}` (branch `{{SLUG}}`, cut from `{{FEATURE}}`)
 - Coordinator's Rex block: `{{COORDINATOR_BLOCK}}`
+<!-- board -->
+- Board task: `{{TSK_NUM}}` (UUID `{{TSK_ID}}`; see "Board task" below)
+<!-- /board -->
 
 ## Goal
 
@@ -31,6 +34,24 @@ You are a worker, not the coordinator. Ignore any coordinator-flow instructions:
 
 {{TODO: the commands to run before reporting, and what "green" means}}
 
+<!-- board -->
+## Board task {{TSK_NUM}}
+
+This task is `{{TSK_NUM}}` on the user's tsk board. The coordinator owns it: only the coordinator changes its status, notes, base or replies, and it mirrors your report there. Your limits:
+
+- You may run only these, and always with the UUID `{{TSK_ID}}`, never the T-number alone:
+  - `tsk list {{TSK_ID}} --json` — read the task (it is a JSON array: use `.[0]`).
+  - `tsk steps {{TSK_ID}} add "<text>"` — add a todo for this task.
+  - `tsk steps {{TSK_ID}} toggle <short_id>` — complete a todo. Toggle flips the step, so read the task first and toggle only a step whose `.done` is `false`.
+- Never run `tsk status`, `edit`, `reply`, `archive`, `dispatch`, `clean` or `trash`, and never a bare `tsk add` or `tsk list`: this worktree counts as a different project on the board.
+- Never retry a failed `steps add` or `toggle` blindly: read the task first, it may have gone through.
+- Steps are the user's plan: add one only for real work left on this task, not for your own bookkeeping.
+
+As written on the board when this brief was made:
+
+{{BOARD_TASK}}
+
+<!-- /board -->
 ## Report back (always — also when blocked or stopping early)
 
 1. Write the report to `{{REPORT}}`. Its first line is `Summary: <one line>` (it goes into the coordinator's history), then:
