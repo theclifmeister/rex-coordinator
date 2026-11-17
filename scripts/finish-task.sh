@@ -9,7 +9,7 @@ slug=${1:-}; check_slug "$slug"; abandon=${2:-}
 dir=$(state_dir); root=$(repo_root); feature=$(state_get feature)
 wt="$root/.claude/worktrees/$slug"
 
-# A research pane has no branch: nothing to merge, just close it.
+# A research tab has no branch: nothing to merge, just close it.
 research=0
 [ -f "$dir/tasks/research-$slug.block" ] && [ ! -f "$dir/tasks/$slug.block" ] \
   && ! git -C "$root" rev-parse --verify -q "refs/heads/$slug" >/dev/null && research=1
