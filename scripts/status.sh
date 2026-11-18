@@ -3,8 +3,9 @@
 # it changed since last seen), coordinator state, open tasks, reports waiting, research tabs
 # (with the ref@sha, or the sha, they read), worktrees, and
 # this repo's tsk board (tsk list -p <root> --json) with each task's linked
-# slug and drift flags (!): worker gone but task started, blocked with a
-# reply, review sent back, open task with no board task.
+# slug, its steps progress (steps done/total) and drift flags (!): worker
+# gone but task started, blocked with a reply, review sent back, open task
+# with no board task.
 source "$(dirname "$0")/lib.sh"
 dir=$(state_dir)
 if [ ! -f "$dir/state" ]; then echo "No coordinator set for this repo."; exit 0; fi
@@ -55,6 +56,11 @@ for f in "$dir"/tasks/*.tsk "$dir"/review/*.tsk; do
   kind=open; case $f in "$dir"/review/*) kind=review ;; esac
   links+="$(cut -d' ' -f1 < "$f" | head -n1) $(basename "$f" .tsk) $kind"$'\n'
 done
+steps() { # steps <task-json>: "  steps <done>/<total>" when it has steps (0.14 rows carry the counts)
+  jq -r '((.steps_total // ((.steps // []) | length)) | tonumber? // 0) as $t
+    | ((.steps_done // ([(.steps // [])[] | select(.done)] | length)) | tonumber? // 0) as $d
+    | if $t > 0 then "  steps \($d)/\($t)" else "" end' <<<"$1" 2>/dev/null || true
+}
 label() { if [ "$2" = review ]; then echo "[$1, merged]"; else echo "[$1]"; fi; }
 flag() { # flag <task-json> <slug> <kind>: drift notes for one linked task
   local t=$1 slug=$2 kind=$3 st
@@ -88,7 +94,7 @@ while IFS=$'\x1f' read -r id num st on title; do
     read -r _ lslug kind <<<"$link"
     # List rows leave out past reviews and replies: read the linked task in full.
     t=$(tsk_task "$id") || t=$(jq -c --arg id "$id" '.[] | select(.id == $id)' <<<"$rows")
-    extra="  $(label "$lslug" "$kind")$(flag "$t" "$lslug" "$kind")"
+    extra="  $(label "$lslug" "$kind")$(steps "$t")$(flag "$t" "$lslug" "$kind")"
   fi
   echo "  T$num $st${on:+ (on $on)} $title$extra"
 done < <(jq -r '.[] | [.id, (.number|tostring), .status, (.block.on // .review.on // ""), .title] | join("\u001f")' <<<"$rows")
@@ -98,7 +104,7 @@ while read -r id lslug kind; do
   [ -n "$id" ] || continue
   grep -qxF "$id" <<<"$listed" && continue
   if t=$(tsk_task "$id"); then
-    echo "  T$(jq -r .number <<<"$t") $(jq -r .status <<<"$t") $(jq -r .title <<<"$t")  $(label "$lslug" "$kind")$(flag "$t" "$lslug" "$kind")"
+    echo "  T$(jq -r .number <<<"$t") $(jq -r .status <<<"$t") $(jq -r .title <<<"$t")  $(label "$lslug" "$kind")$(steps "$t")$(flag "$t" "$lslug" "$kind")"
   else
     echo "  ? $id  [$lslug] (!) linked task not readable"
   fi
