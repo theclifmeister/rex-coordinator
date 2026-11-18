@@ -8,8 +8,8 @@ compatibility: "Claude Code in a Rex terminal pane; requires rex, git >= 2.31, j
 
 Make this pane the repo's coordinator:
 
-1. Run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/start.sh" $ARGUMENTS`. It records this pane's `$REX_BLOCK`, the session and the feature branch (default: the branch the main checkout is on), and replaces any earlier coordinator — there is only one per repo.
+1. Run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/start.sh" $ARGUMENTS`. It records this pane's `$REX_BLOCK` and the session, and replaces any earlier coordinator — there is only one per repo. The feature branch is always the branch the main checkout has checked out: without an argument that is the current branch; with a branch name, the script checks that branch out in the main checkout first, and refuses if the checkout has uncommitted changes or a merge/rebase in progress, or the branch doesn't exist. Later switches need no command: a plain `git checkout` in the main checkout.
 2. Confirm to the user in one line: the coordinator block, the feature branch and its HEAD.
 3. Load the `rex-coordinator:coordinator` skill and act as the coordinator from now on. Run its session-start steps (`status.sh`) and report anything left over from earlier.
 
-If the script refuses (a worker, not in a Rex pane, or a required tool missing — it runs `scripts/doctor.sh` first), tell the user why and stop.
+If the script refuses (a worker, not in a Rex pane, a required tool missing, or a branch it can't check out — it runs `scripts/doctor.sh` first), tell the user why and stop.

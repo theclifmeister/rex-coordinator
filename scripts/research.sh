@@ -2,7 +2,8 @@
 # research.sh <topic-slug> [--ref <branch|commit>] <question...> — start a
 # read-only worker Claude in a new background Rex tab, without taking focus.
 # It reads a detached worktree at .claude/worktrees/_research/<topic>, checked
-# out at <ref> (default: the feature branch tip), never the main checkout's
+# out at <ref> (default: the tip of the feature branch, the main checkout's
+# current branch), never the main checkout's
 # working tree. Prints the tab's block ID; the answer lands in
 # research/<topic>.md. tasks/research-<topic>.block holds the block ID and
 # tasks/research-<topic>.ref holds "<ref> <short sha>" (a commit given as
@@ -12,13 +13,13 @@ source "$(dirname "$0")/lib.sh"
 require_coordinator
 usage="usage: research.sh <topic-slug> [--ref <branch|commit>] <question>"
 topic=${1:-}; check_slug "$topic"; shift
-ref=$(state_get feature)
+ref=
 if [ "${1:-}" = --ref ]; then
   [ -n "${2:-}" ] || die "$usage"
   ref=$2; shift 2
 fi
 q="$*"; [ -n "$q" ] || die "$usage"
-[ -n "$ref" ] || die "no feature branch recorded and no --ref given"
+[ -n "$ref" ] || ref=$(feature_branch) || die "no feature branch (main checkout on no branch, none recorded) and no --ref given"
 dir=$(state_dir); coord=$(state_get block); root=$(repo_root)
 answer="$dir/research/$topic.md"
 wt="$root/.claude/worktrees/_research/$topic"

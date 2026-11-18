@@ -29,7 +29,7 @@ if [ -n "${tsk_id:-}" ] && have_tsk; then
   if task=$(tsk_task "$tsk_id"); then
     notes=$(jq -r '.notes // ""' <<<"$task")
     if ! grep -qF "$block" <<<"$notes"; then
-      tsk_try edit "$tsk_id" --append-notes="Rex worker $(date +%F): block $block · branch $slug off $(state_get feature) · worktree $wt · brief $brief"
+      tsk_try edit "$tsk_id" --append-notes="Rex worker $(date +%F): block $block · branch $slug off $(task_base "$slug") · worktree $wt · brief $brief"
     fi
   else
     tsk_warn "could not read $tsk_id: notes not updated (append is not safe to repeat blind)"

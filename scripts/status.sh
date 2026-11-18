@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# status.sh — coordinator state, open tasks, reports waiting, research tabs
+# status.sh — the feature branch (the main checkout's branch, and a note when
+# it changed since last seen), coordinator state, open tasks, reports waiting, research tabs
 # (with the ref@sha, or the sha, they read), worktrees, and
 # this repo's tsk board (tsk list -p <root> --json) with each task's linked
 # slug and drift flags (!): worker gone but task started, blocked with a
@@ -8,11 +9,17 @@ source "$(dirname "$0")/lib.sh"
 dir=$(state_dir)
 if [ ! -f "$dir/state" ]; then echo "No coordinator set for this repo."; exit 0; fi
 root=$(repo_root)
-feature=$(state_get feature)
+resolve_feature || true; feature=$FEATURE
+if [ -n "$feature" ]; then
+  src="the main checkout's branch"; [ -z "$FEATURE_WARN" ] || src="last seen"
+  echo "Feature branch:    $feature @ $(git -C "$root" rev-parse --short "$feature" 2>/dev/null || echo '?')  ($src)"
+else
+  echo "Feature branch:    none"
+fi
+[ -z "$FEATURE_WARN" ] || echo "  (!) $FEATURE_WARN"
+[ -z "$FEATURE_NOTE" ] || echo "  (!) $FEATURE_NOTE"
 echo "Coordinator block: $(state_get block)"
 [ "$(state_get block)" = "${REX_BLOCK:-}" ] && echo "  (this pane)" || echo "  (NOT this pane: ${REX_BLOCK:-none})"
-echo "Feature branch:    $feature @ $(git -C "$root" rev-parse --short "$feature")"
-echo "Main checkout on:  $(git -C "$root" branch --show-current)"
 echo
 echo "Open tasks:"
 found=0
@@ -27,9 +34,12 @@ for f in "$dir"/tasks/*.block; do
       at=$(research_reads "$dir/tasks/$slug.ref")
       echo "  $slug  tab=$block ($alive)  reads=${at:-?}  $report" ;;
     *)
-      ahead=$(git -C "$root" rev-list --count "$feature..$slug" 2>/dev/null || echo "?")
+      base=$(task_base "$slug")
+      ahead=$(git -C "$root" rev-list --count "$base..$slug" 2>/dev/null || echo "?")
       board=$(tsk_link "$slug" | cut -d' ' -f2)
-      echo "  $slug  tab=$block ($alive)  commits=$ahead  $report  board=${board:-none (!)}" ;;
+      other=; [ -z "$feature" ] || [ "$base" = "$feature" ] \
+        || other="  (!) base is not the feature branch: merge it with the main checkout on $base"
+      echo "  $slug  tab=$block ($alive)  base=${base:-?}  commits=$ahead  $report  board=${board:-none (!)}$other" ;;
   esac
 done
 [ $found = 1 ] || echo "  none"
