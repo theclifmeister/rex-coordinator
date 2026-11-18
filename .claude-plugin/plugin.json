@@ -6,6 +6,8 @@
   "author": {
     "name": "Clifford van Slimming"
   },
+  "license": "MIT",
+  "keywords": ["rex", "worktree", "coordinator", "multi-agent", "tsk"],
   "skills": [
     "./skills/"
   ],

@@ -4,6 +4,8 @@ source "$(dirname "$0")/lib.sh"
 [ "${CLAUDE_ROLE:-}" != worker ] || die "CLAUDE_ROLE=worker: a worker can't become the coordinator"
 [ -n "${REX_BLOCK:-}" ] || die "REX_BLOCK is not set: run this inside a Rex pane"
 [ -n "${REX_SESSION:-}" ] || die "REX_SESSION is not set"
+bash "$(dirname "$0")/doctor.sh" --quiet \
+  || die "required tools are missing (above): install them, then rerun /coordinator-start"
 
 dir=$(state_dir)
 root=$(repo_root)

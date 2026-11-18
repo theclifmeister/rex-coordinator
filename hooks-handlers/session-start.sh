@@ -9,6 +9,9 @@ state="$common/rex-coordinator/state"
 [ -f "$state" ] || exit 0
 block=$(sed -n 's/^block=//p' "$state" | head -n1)
 [ "$block" = "$REX_BLOCK" ] || exit 0
+# Coordinator pane only from here on: everything else stayed silent above.
+missing=""
+for c in rex jq; do command -v "$c" >/dev/null 2>&1 || missing="$missing $c"; done
 feature=$(sed -n 's/^feature=//p' "$state" | head -n1)
 root="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 
@@ -23,4 +26,11 @@ $recent
 
 Older entries, briefs, reports and research answers: $root/scripts/recall.sh <word> [word...]."
 fi
-printf '%s' "$ctx" | jq -Rs '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:.}}'
+[ -z "$missing" ] || ctx="WARNING: rex-coordinator needs$missing on PATH; its scripts will fail until that is installed (check with $root/scripts/doctor.sh). Tell the user.
+
+$ctx"
+if command -v jq >/dev/null 2>&1; then
+  printf '%s' "$ctx" | jq -Rs '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:.}}'
+else
+  printf '%s\n' "$ctx" # without jq: plain stdout also becomes the session's context
+fi
