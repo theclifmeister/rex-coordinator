@@ -6,6 +6,7 @@
 # A research topic (tasks/research-<slug>.block, no branch): close its tab,
 # force-remove its detached worktree .claude/worktrees/_research/<slug> and
 # drop tasks/research-<slug>.ref.
+# Both: drops Claude Code's local-scope plugin record for the worktree's path.
 # Appends one line per closed task to <state-dir>/history.md (the ledger);
 # its paths are relative to the state dir (older lines hold absolute ones).
 # Linked board task (tasks/<slug>.tsk): merged -> review on you with the merge
@@ -85,6 +86,10 @@ if [ -f "$tabf" ]; then
 fi
 
 if [ $research = 1 ]; then rm -f "$dir/tasks/research-$slug.ref"; else rm -f "$dir/tasks/$slug.base"; fi
+# The local install record Claude Code made for the worker's worktree (see
+# plugin_drop_local_record in lib.sh), while the worktree is still there.
+# Best-effort and silent on failure; skipped without claude.
+[ -z "$(plugin_drop_local_record "$wt")" ] || echo "Dropped Claude Code's local plugin record for $wt."
 if [ -d "$wt" ]; then
   [ -L "$wt/node_modules" ] && rm "$wt/node_modules"
   # A research worktree is detached and read-only: nothing to keep.
