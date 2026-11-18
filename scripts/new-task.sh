@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # new-task.sh <slug> [T<n>] [--title "<text>"] — branch + worktree off the
-# feature branch, and a brief skeleton to fill in. Prints the brief path.
+# feature branch (the main checkout's current branch), and a brief skeleton to
+# fill in. Prints the brief path. tasks/<slug>.base records that branch: the
+# task merges back into it, even if the main checkout switches meanwhile.
 # Board (when tsk is installed): with T<n>, link that task (it must belong to
 # this repo and not be done); without, create one (--title is then required)
 # and link it. The link goes to tasks/<slug>.tsk, and the
@@ -20,7 +22,8 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$want" ] || ! have_tsk || [ -n "$title" ] \
   || die "no T<n> given, so a board task will be created: pass --title \"<text>\" (verb-first)"
-dir=$(state_dir); root=$(repo_root); feature=$(state_get feature)
+dir=$(state_dir); root=$(repo_root)
+feature=$(feature_branch) || die "no feature branch: check a branch out in the main checkout ($root)"
 wt="$root/.claude/worktrees/$slug"
 brief="$dir/briefs/$slug.md"
 
@@ -55,6 +58,8 @@ if [ -n "$want" ]; then
 fi
 
 git -C "$root" worktree add -q -b "$slug" "$wt" "$feature"
+# The task merges back into the branch it was cut from, even after a switch.
+mkdir -p "$dir/tasks"; echo "$feature" > "$dir/tasks/$slug.base"
 
 # Project run-time needs that must not be committed (extend as needed).
 [ -d "$root/node_modules" ] && [ ! -e "$wt/node_modules" ] && ln -s "$root/node_modules" "$wt/node_modules"

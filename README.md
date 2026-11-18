@@ -53,7 +53,8 @@ Then `/reload-plugins` (or restart) in open panes. See `CLAUDE.md` for checks an
 
 ## Use
 
-- `/coordinator-start [feature-branch]` in the pane that should coordinate. It records that pane's `$REX_BLOCK` for the current repo.
+- `/coordinator-start [feature-branch]` in the pane that should coordinate. It records that pane's `$REX_BLOCK` for the current repo. With a branch name it first checks that branch out in the main checkout (only if the checkout is clean).
+- The feature branch is the main checkout's current branch: to switch, `git checkout <branch>` there. New tasks branch off it; each task remembers its own base and merges back into that. `status.sh` notes a switch and flags tasks based on another branch.
 - After that, a `SessionStart` hook re-activates the coordinator in that pane on every new session, `/clear` and compaction. Every other pane, and every worker (`CLAUDE_ROLE=worker`), sees nothing.
 - `/coordinator-stop` turns it off.
 
@@ -66,7 +67,7 @@ Then `/reload-plugins` (or restart) in open panes. See `CLAUDE.md` for checks an
 - `tools/bump-version.sh`, `.github/workflows/`: release tooling (see `CLAUDE.md`).
 - `scripts/`: `doctor`, `start`, `stop`, `status`, `new-task`, `launch-worker`, `watch`, `research`, `tell`, `finish-task`, `recall`, `board`, `board-watch`.
 
-State is per repo, in `<git-common-dir>/rex-coordinator/` (state, briefs, reports, research answers, task-to-block map, task-to-board links). It is never committed. `history.md` there is a one-line-per-task ledger written by `finish-task` (paths relative to that state dir); the coordinator sees its tail at session start, and `recall` searches it with the briefs, reports and research answers. Worktrees go in `.claude/worktrees/`, which is added to `.git/info/exclude`. Research (`research.sh <topic> [--ref <branch|commit>] "<question>"`) reads a detached worktree in `.claude/worktrees/_research/<topic>` at the feature branch tip or the given ref, never the main checkout's working tree; `finish-task` removes it.
+State is per repo, in `<git-common-dir>/rex-coordinator/` (state with the coordinator pane and the last seen feature branch, briefs, reports, research answers, task-to-block map, task bases, task-to-board links). It is never committed. `history.md` there is a one-line-per-task ledger written by `finish-task` (paths relative to that state dir); the coordinator sees its tail at session start, and `recall` searches it with the briefs, reports and research answers. Worktrees go in `.claude/worktrees/`, which is added to `.git/info/exclude`. Research (`research.sh <topic> [--ref <branch|commit>] "<question>"`) reads a detached worktree in `.claude/worktrees/_research/<topic>` at the feature branch tip (the main checkout's branch) or the given ref, never the main checkout's working tree; `finish-task` removes it.
 
 ## tsk board
 
