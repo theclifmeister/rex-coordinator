@@ -6,7 +6,9 @@
 # Board (when tsk is installed): with T<n>, link that task (it must belong to
 # this repo and not be done); without, create one (--title is then required)
 # and link it. The link goes to tasks/<slug>.tsk, and the
-# board task's title, notes and steps are copied into the brief.
+# board task's title, notes and steps are copied into the brief. The board
+# task's thread becomes the feature branch (made a valid thread name): set on
+# create, and on link only when it has no thread yet (needs tsk >= 0.14.1).
 source "$(dirname "$0")/lib.sh"
 require_coordinator
 slug=${1:-}; check_slug "$slug"; shift
@@ -65,15 +67,24 @@ mkdir -p "$dir/tasks"; echo "$feature" > "$dir/tasks/$slug.base"
 [ -d "$root/node_modules" ] && [ ! -e "$wt/node_modules" ] && ln -s "$root/node_modules" "$wt/node_modules"
 
 # No task named: create one in this repo's project, based on the feature branch.
+# Its thread is the feature branch (as a thread name).
 if [ -z "$want" ] && have_tsk; then
-  rc=0; out=$(tsk add -p "$root" -t "$title" --base "$feature" --json 2>&1) || rc=$?
-  # Seen once, not reproduced: unknown-base for an existing local branch. A
-  # refused add saved nothing, so add again without a base.
-  if [ $rc = 1 ] && grep -q 'unknown-base' <<<"$out"; then
-    tsk_warn "base '$feature' refused ($out); adding without a base"
-    rc=0; out=$(tsk add -p "$root" -t "$title" --json 2>&1) || rc=$?
-  fi
-  if [ $rc = 0 ] && id=$(jq -re '.id' <<<"$out" 2>/dev/null); then
+  base_arg=(--base "$feature") thread=$(thread_name "$feature") thread_arg=()
+  [ -z "$thread" ] || thread_arg=(--thread "$thread")
+  for _ in 1 2 3; do
+    rc=0; out=$(tsk add -p "$root" -t "$title" ${base_arg[@]+"${base_arg[@]}"} ${thread_arg[@]+"${thread_arg[@]}"} --json 2>&1) || rc=$?
+    # A refused add saved nothing (exit 1 refusal, exit 2 usage), so add again
+    # without what was refused. unknown-base: seen once for an existing local
+    # branch, not reproduced. A thread refusal: an older or stricter tsk.
+    if [ "$rc" = 1 ] && [ ${#base_arg[@]} -gt 0 ] && grep -q 'unknown-base' <<<"$out"; then
+      tsk_warn "base '$feature' refused ($(one_line 120 <<<"$out")); adding without a base"
+      base_arg=()
+    elif [ "$rc" != 0 ] && [ "$rc" != 3 ] && [ ${#thread_arg[@]} -gt 0 ] && head -n1 <<<"$out" | grep -qi 'thread'; then
+      tsk_warn "thread '$thread' refused ($(head -n1 <<<"$out" | one_line 120)); adding without a thread"
+      thread_arg=()
+    else break; fi
+  done
+  if [ "$rc" = 0 ] && id=$(jq -re '.id' <<<"$out" 2>/dev/null); then
     task=$(tsk_task "$id") || task=$(jq -c . <<<"$out")
   else
     tsk_warn "add failed (exit $rc): $out — no board task for $slug"
@@ -84,6 +95,8 @@ tsk_id='' tsk_num=''
 if [ -n "$task" ]; then
   tsk_id=$(jq -r .id <<<"$task"); tsk_num="T$(jq -r .number <<<"$task")"
   echo "$tsk_id $tsk_num" > "$dir/tasks/$slug.tsk"
+  # A linked task without a thread goes on the feature branch's (a created one got it on add).
+  [ -z "$want" ] || tsk_set_thread "$tsk_id" "$feature"
   # A sent-back task linked again: it is an open task now, not in review.
   for f in "$dir"/review/*.tsk; do
     [ -f "$f" ] && [ "$(head -n1 "$f" | cut -d' ' -f1)" = "$tsk_id" ] && rm -f "$f"

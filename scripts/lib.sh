@@ -125,8 +125,9 @@ check_slug() {
   [[ "${1:-}" =~ ^[a-z0-9][a-z0-9._-]*$ ]] || die "slug must be lowercase letters, digits, . _ - (got '${1:-}')"
 }
 
-# --- tsk board (optional) -------------------------------------------------
-# Every board call is best-effort: skipped when tsk is not installed, and a
+# --- tsk board --------------------------------------------------------------
+# doctor.sh requires tsk >= 0.14.1 at activation, but every board call stays
+# best-effort: skipped when tsk is not (or no longer) installed, and a
 # failure only warns (to stderr), never fails the git/Rex work. Project-scoped
 # calls always pass -p "$(repo_root)"; starts always pass --no-dispatch.
 # A coordinator task's board link is tasks/<slug>.tsk while it is open, and
@@ -172,6 +173,29 @@ tsk_link() { # tsk_link <slug>: "<uuid> T<n>" of its linked board task, or nothi
   head -n1 "$f"
 }
 
+thread_name() { # thread_name <branch>: a tsk thread name for it (letters, digits, - and .)
+  printf '%s' "$1" | tr -c 'A-Za-z0-9.-' '-' | tr -s '-' | sed 's/^[-.]*//; s/[-.]*$//'
+}
+
+# tsk_set_thread <uuid> <branch>: put a linked task on the branch's thread,
+# unless it already has one (the user's choice wins). Best-effort: tsk older
+# than 0.14.1 has no `edit --thread`, and only a note says so.
+tsk_set_thread() {
+  have_tsk || return 0
+  local t cur name out rc=0
+  name=$(thread_name "$2"); [ -n "$name" ] || return 0
+  t=$(tsk_task "$1") || return 0
+  cur=$(jq -r '.thread // ""' <<<"$t")
+  [ -z "$cur" ] || return 0
+  out=$(tsk edit "$1" --thread "$name" 2>&1) || rc=$?
+  case $rc in
+    0) ;;
+    2) tsk_warn "thread not set (tsk edit --thread needs tsk >= 0.14.1): $(head -n1 <<<"$out" | one_line 120)" ;;
+    *) tsk_warn "thread not set (exit $rc): $(one_line 160 <<<"$out")" ;;
+  esac
+  return 0
+}
+
 one_line() { # one_line [max]: stdin squashed to one line, cut to max chars
   tr '\r\n\t' '   ' | tr -s ' ' | sed 's/^ //; s/ $//' | cut -c1-"${1:-200}"
 }
@@ -186,4 +210,156 @@ research_reads() {
          if ($1 == $2 || ($1 ~ /^[0-9a-f]+$/ && index($1, $2) == 1)) print $2
          else print $1 "@" $2
        }' "$1" 2>/dev/null || true
+}
+
+# --- Reports on the board ----------------------------------------------------
+# A worker's report (layout in brief-template.md): line 1 "Summary: <one line>",
+# then "## Done", "## Checks" (one "- PASS|FAIL|SKIP <text>" line per check),
+# "## Not done" and "## Open questions" (bullets, or "none"). finish-task.sh
+# mirrors it onto the linked task's review round; board.sh adds checks later.
+# A check spec is "PASS|FAIL|SKIP[:] <text>": the check is added open, with
+# the result kept in its text ("PASS: <text>"), because the ticks are the
+# user's (tsk: checks are the reviewer's). tsk caps each text at 4096 bytes,
+# so texts are cut well below that.
+REVIEW_MAX_CHECKS=20
+
+report_section() { # report_section <file> <heading>: the lines under "## <heading>", up to the next "## "
+  awk -v h="## $2" '{ l = $0; sub(/[[:space:]]+$/, "", l) }
+    p && /^## / { exit } p { print } l == h { p = 1 }' "$1" 2>/dev/null || true
+}
+
+check_spec() { # check_spec <spec>: "open\t<PASS|FAIL|SKIP>: <text>" (no word: the text as is), nothing for empty text
+  local s w
+  s=$(printf '%s' "$1" | one_line 100000)
+  w=$(sed -nE 's/^(PASS|FAIL|SKIP)(:|[[:space:]]).*/\1/p' <<<"$s")
+  if [ -n "$w" ]; then
+    s=$(sed -E 's/^(PASS|FAIL|SKIP):?[[:space:]]*//' <<<"$s")
+    [ -n "$s" ] || return 0
+    s="$w: $s"
+  fi
+  [ -n "$s" ] || return 0
+  printf 'open\t%s\n' "$(one_line 300 <<<"$s")"
+}
+
+report_checks() { # report_checks <file>: its "## Checks" as check_spec lines; return 1 if it has none
+  local l out=''
+  while IFS= read -r l; do
+    out+=$(check_spec "$l")$'\n'
+  done < <(report_section "$1" Checks | sed -nE 's/^[-*][[:space:]]+((PASS|FAIL|SKIP)(:|[[:space:]]).*)$/\1/p')
+  [ -n "$out" ] || return 1
+  printf '%s' "$out"
+}
+
+report_questions() { # report_questions <file>: its open questions on one line ("; "-joined), nothing for "none"
+  local q
+  q=$(report_section "$1" "Open questions" | awk '
+    /^[[:space:]]*$/ { next }
+    /^[[:space:]]*([-*]|[0-9]+\.)[[:space:]]/ { sub(/^[[:space:]]*([-*]|[0-9]+\.)[[:space:]]+/, ""); if (n++) printf "; "; printf "%s", $0; next }
+    { sub(/^[[:space:]]+/, ""); printf "%s%s", (n++ ? " " : ""), $0 }' | one_line 1000)
+  grep -qiE '^(none|n/a|-)\.?$' <<<"$q" || printf '%s\n' "$q"
+}
+
+cap_checks() { # cap_checks [max]: the first max check_spec lines of stdin, then "… N more checks in the report"
+  awk -F'\t' -v m="${1:-$REVIEW_MAX_CHECKS}" 'NF >= 2 && $2 != "" { if (++n <= m) print; else more++ }
+    END { if (more) printf "open\t… %d more check%s in the report\n", more, (more > 1 ? "s" : "") }'
+}
+
+# tsk_review <uuid> <done> <next>: put the task in review on you with the
+# "<state>\t<text>" lines on stdin as its checks (in that order; an empty done
+# or next leaves the round's own), then set each check whose state differs.
+# The plugin's own checks are always open (check_spec); other states are only
+# the user's marks, re-passed by board.sh. Repeating it edits the open round,
+# and tsk replaces its whole check list: pass every check each time.
+tsk_review() {
+  local id=$1 st tx i=0 c want cur
+  local -a args=(review --on you) states=()
+  [ -z "$2" ] || args+=(--done="$2")
+  [ -z "$3" ] || args+=(--next="$3")
+  while IFS=$'\t' read -r st tx; do
+    [ -n "$tx" ] || continue
+    args+=(--check="$tx"); states+=("$st")
+  done
+  have_tsk || return 0
+  tsk_try status "$id" "${args[@]}"
+  [ "$TSK_RC" = 0 ] && [ ${#states[@]} -gt 0 ] || return 0
+  cur=$(tsk_task "$id" | jq -r '.review.checks[]?.state' 2>/dev/null) || cur=
+  while IFS= read -r c; do
+    [ -n "$c" ] || continue
+    i=$((i + 1)); want=${states[$((i - 1))]:-}
+    [ -z "$want" ] || [ "$want" = "$c" ] || tsk_try checks "$id" set "$i" "$want"
+  done <<<"$cur"
+  return 0
+}
+
+tsk_note_once() { # tsk_note_once <uuid> <line>: append the line to its notes unless they hold it already
+  local t
+  t=$(tsk_task "$1") || { tsk_warn "could not read $1: note not added (appending is not safe to repeat blind)"; return 0; }
+  grep -qF -- "$2" <<<"$(jq -r '.notes // ""' <<<"$t")" || tsk_try edit "$1" --append-notes="$2"
+}
+
+# --- Claude Code's local-scope plugin records -------------------------------
+# With the plugin enabled at local scope (the repo's .claude/settings.local.json,
+# which Claude Code shares across all the repo's worktrees), every session that
+# starts in a worktree adds a local install record for that worktree's path to
+# installed_plugins.json. The record outlives the worktree, and a bare
+# `claude plugin update` may pick it instead of the user-scope one.
+
+plugin_records_file() { echo "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/installed_plugins.json"; }
+
+# plugin_local_records: "<plugin id><TAB><projectPath>" for every local-scope
+# record of rex-coordinator@<any marketplace>. Nothing without jq or the file.
+plugin_local_records() {
+  local f; f=$(plugin_records_file)
+  [ -f "$f" ] && command -v jq >/dev/null 2>&1 || return 0
+  jq -r '.plugins // {} | to_entries[] | select(.key | startswith("rex-coordinator@"))
+         | .key as $id | .value[]? | select(.scope == "local" and (.projectPath // "") != "")
+         | "\($id)\t\(.projectPath)"' "$f" 2>/dev/null || true
+}
+
+# plugin_drop_local_record <path>: remove rex-coordinator's local-scope
+# record(s) for <path> (absolute) with `claude plugin uninstall --scope local
+# --keep-data` run from <path>: only that path's record goes. A gone path is
+# made empty for the call and removed again. That command also drops
+# the plugin from the repo's .claude/settings.local.json, so the file is put
+# back as it was. Best-effort and silent; does nothing without claude or jq, or
+# without such a record. Prints "<id>" per record it removed. Always returns 0.
+plugin_drop_local_record() {
+  local path=$1 real ids id made='' top common settings='' bak='' existed=0
+  command -v claude >/dev/null 2>&1 && command -v jq >/dev/null 2>&1 || return 0
+  case $path in /*) ;; *) return 0 ;; esac
+  real=$(canon_dir "$path")
+  ids=$(plugin_local_records | awk -F'\t' -v p="$path" -v r="$real" '$2 == p || $2 == r {print $1}' | sort -u)
+  [ -n "$ids" ] || return 0
+  if [ ! -e "$path" ]; then
+    top=$path # the topmost directory that has to be made (removed again below)
+    while [ ! -e "$(dirname "$top")" ]; do top=$(dirname "$top"); done
+    mkdir -p "$path" 2>/dev/null || return 0
+    made=$top
+  fi
+  [ -d "$path" ] || return 0
+  # The settings file Claude Code uses for local scope: the main checkout's.
+  if common=$(git -C "$path" rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
+    settings="$(dirname "$common")/.claude/settings.local.json"
+    if [ -f "$settings" ]; then
+      existed=1; bak=$(mktemp "${TMPDIR:-/tmp}/rexc-settings.XXXXXX") && cp -p "$settings" "$bak" || bak=''
+    fi
+  fi
+  for id in $ids; do
+    if (cd "$path" && claude plugin uninstall "$id" --scope local --keep-data) </dev/null >/dev/null 2>&1 \
+       && ! plugin_local_records | awk -F'\t' -v i="$id" -v p="$path" -v r="$real" \
+              '$1 == i && ($2 == p || $2 == r) {f=1} END {exit !f}'; then
+      echo "$id"
+    fi
+  done
+  if [ -n "$settings" ]; then
+    if [ -n "$bak" ]; then
+      cmp -s "$bak" "$settings" 2>/dev/null || cat "$bak" > "$settings" 2>/dev/null || true
+      rm -f "$bak"
+    elif [ $existed = 0 ] && [ -f "$settings" ] \
+         && jq -e '. == {"enabledPlugins": {}}' "$settings" >/dev/null 2>&1; then
+      rm -f "$settings" # created by the uninstall, holding nothing
+    fi
+  fi
+  [ -z "$made" ] || rm -rf "$made"
+  return 0
 }

@@ -54,11 +54,27 @@ As written on the board when this brief was made:
 <!-- /board -->
 ## Report back (always — also when blocked or stopping early)
 
-1. Write the report to `{{REPORT}}`. Its first line is `Summary: <one line>` (it goes into the coordinator's history), then:
-   - what was done, with the commit hashes;
-   - the checks run, with pass and fail counts;
-   - what was not done, and why;
-   - open questions for the user.
+1. Write the report to `{{REPORT}}` in this layout. Its first line is `Summary: <one line>` (it goes into the coordinator's history), then these four sections, headings exactly as shown (the coordinator copies the checks and open questions onto the board task for the user's review):
+
+   ```markdown
+   Summary: <one line>
+
+   ## Done
+   <what was done, with the commit hashes>
+
+   ## Checks
+   - PASS <check and its result>
+   - FAIL <check and what failed>
+   - SKIP <check not run, and why>
+
+   ## Not done
+   <what was not done, and why; or none>
+
+   ## Open questions
+   - <a question for the user; or the single word none>
+   ```
+
+   Under `## Checks`, one line per check, each starting `- PASS`, `- FAIL` or `- SKIP` at the start of the line, short and on one line. Put any longer detail (setup, experiments) in its own `##` section after `## Done`, not inside `## Checks`.
 2. Print `REPORT DONE {{SLUG}}` in your tab, followed by a three-line summary.
 3. Tell the coordinator (printing in your own tab is not enough — it can't see it):
    `rex send -b {{COORDINATOR_BLOCK}} "REPORT DONE {{SLUG}}: <one-line summary>. Report: {{REPORT}}"`
