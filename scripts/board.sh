@@ -8,11 +8,12 @@
 #                                 reply first (skipped if that reply is already
 #                                 there); then set it started --no-dispatch
 #   check "PASS|FAIL|SKIP <text>"...
-#                                 add checks to the open review round with
-#                                 that state, keeping its other checks and
-#                                 their states (tsk replaces the whole list
-#                                 on every review call); a same-text check is
-#                                 replaced
+#                                 add checks to the open review round, open,
+#                                 with the result in the text ("PASS: ...";
+#                                 the ticks are the user's), keeping its other
+#                                 checks and the user's marks on them (tsk
+#                                 replaces the whole list on every review
+#                                 call); a same-text check is replaced
 # Board failures only warn; nothing here touches git or Rex.
 source "$(dirname "$0")/lib.sh"
 require_coordinator
@@ -53,7 +54,8 @@ case $action in
     [ "$st" = review ] || { echo "$num is $st, not in review: no check added."; exit 0; }
     new=$(for c in "$@"; do check_spec "$c"; done)
     [ -n "$new" ] || die "no check text given"
-    # Existing checks with their states, minus any the new ones replace.
+    # Existing checks with their states (the user's marks), minus any the new
+    # ones replace (same prefixed text); the new ones go in open.
     { jq -r '.review.checks[]? | "\(.state)\t\(.text)"' <<<"$task" \
         | awk -F'\t' 'NR == FNR { n[$2] = 1; next } !($2 in n)' <(printf '%s\n' "$new") -
       printf '%s\n' "$new"
