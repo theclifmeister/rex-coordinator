@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Shared helpers for rex-coordinator scripts. Source, don't run.
 set -euo pipefail
 

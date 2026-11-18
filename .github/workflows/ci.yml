@@ -1,0 +1,67 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest # jq and shellcheck are preinstalled
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # tags and history for the version-bump check
+
+      - name: JSON parses
+        run: jq empty .claude-plugin/plugin.json .claude-plugin/marketplace.json hooks/hooks.json
+
+      - name: Manifests agree
+        run: |
+          p=.claude-plugin/plugin.json m=.claude-plugin/marketplace.json
+          name=$(jq -r .name "$p"); ver=$(jq -r '.version // ""' "$p")
+          [[ "$ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error file=$p::version '$ver' is not x.y.z"; exit 1; }
+          jq -e --arg n "$name" '
+            (.name|type=="string") and (.owner.name|type=="string") and
+            (.plugins|length==1) and .plugins[0].name==$n and
+            (.plugins[0].source=="./" or .plugins[0].source==".") and
+            (.plugins[0]|has("version")|not)' "$m" >/dev/null \
+            || { echo "::error file=$m::entry must be {name:\"$name\", source:\"./\"} without version"; exit 1; }
+
+      - name: shellcheck
+        working-directory: scripts
+        run: shellcheck -x ./*.sh ../hooks-handlers/session-start.sh ../tools/*.sh
+
+      - name: Plugin changed without a version bump?
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          ver=$(jq -r .version .claude-plugin/plugin.json)
+          if [ "$EVENT" = pull_request ]; then
+            base=$(git merge-base HEAD "origin/$BASE_REF")
+            old=$(git show "$base":.claude-plugin/plugin.json | jq -r .version)
+          else
+            base=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)
+            old=${base#v}
+          fi
+          [ -n "$base" ] || { echo "no base to compare with"; exit 0; }
+          if ! git diff --quiet "$base" HEAD -- skills scripts hooks hooks-handlers .claude-plugin/plugin.json \
+             && [ "$old" = "$ver" ]; then
+            echo "::warning::plugin files changed since $base but version is still $ver: users will not get this change"
+          else
+            echo "ok: version $ver (was $old at $base)"
+          fi
+
+      - name: claude plugin validate
+        # Not --strict: CLAUDE.md sits at the plugin root (source "./") and --strict
+        # fails on that. Works without login.
+        run: |
+          npm install -g --no-fund --no-audit @anthropic-ai/claude-code@2.1.327
+          claude plugin validate .
