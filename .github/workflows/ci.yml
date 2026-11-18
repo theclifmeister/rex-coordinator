@@ -15,7 +15,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0 # tags and history for the version-bump check
 
@@ -45,23 +45,23 @@ jobs:
         run: |
           ver=$(jq -r .version .claude-plugin/plugin.json)
           if [ "$EVENT" = pull_request ]; then
-            base=$(git merge-base HEAD "origin/$BASE_REF")
-            old=$(git show "$base":.claude-plugin/plugin.json | jq -r .version)
+            base=$(git merge-base HEAD "origin/$BASE_REF" 2>/dev/null || true)
+            old=$([ -z "$base" ] || git show "$base":.claude-plugin/plugin.json 2>/dev/null | jq -r '.version // ""' || true)
           else
             base=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)
             old=${base#v}
           fi
-          [ -n "$base" ] || { echo "no base to compare with"; exit 0; }
+          [ -n "$base" ] || { echo "no base to compare with: skipped"; exit 0; }
           if ! git diff --quiet "$base" HEAD -- skills scripts hooks hooks-handlers .claude-plugin/plugin.json \
              && [ "$old" = "$ver" ]; then
-            echo "::warning::plugin files changed since $base but version is still $ver: users will not get this change"
-          else
-            echo "ok: version $ver (was $old at $base)"
+            echo "::error file=.claude-plugin/plugin.json::plugin files changed since $base but version is still $ver: users would not get this change. Run tools/bump-version.sh on main (see CLAUDE.md, Releasing)."
+            exit 1
           fi
+          echo "ok: version $ver (was ${old:-none} at $base)"
 
       - name: claude plugin validate
         # Not --strict: CLAUDE.md sits at the plugin root (source "./") and --strict
         # fails on that. Works without login.
         run: |
-          npm install -g --no-fund --no-audit @anthropic-ai/claude-code@2.1.327
+          npm install -g --no-fund --no-audit @anthropic-ai/claude-code@latest
           claude plugin validate .

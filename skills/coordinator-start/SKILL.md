@@ -3,6 +3,7 @@ name: coordinator-start
 description: Make this Rex pane the coordinator for the current repo (optionally naming the feature branch). User-invoked only.
 disable-model-invocation: true
 argument-hint: "[feature-branch]"
+compatibility: "Claude Code in a Rex terminal pane; requires rex, git >= 2.31, jq, bash; optional tsk"
 ---
 
 Make this pane the repo's coordinator:
@@ -11,4 +12,4 @@ Make this pane the repo's coordinator:
 2. Confirm to the user in one line: the coordinator block, the feature branch and its HEAD.
 3. Load the `rex-coordinator:coordinator` skill and act as the coordinator from now on. Run its session-start steps (`status.sh`) and report anything left over from earlier.
 
-If the script refuses (a worker, or not in a Rex pane), tell the user why and stop.
+If the script refuses (a worker, not in a Rex pane, or a required tool missing — it runs `scripts/doctor.sh` first), tell the user why and stop.
