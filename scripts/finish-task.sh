@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# finish-task.sh <slug> [--abandon] — after the task branch is merged into the
-# feature branch: close its tab, remove the worktree, delete the branch.
+# finish-task.sh <slug> [--abandon] — after the task branch is merged into its
+# base (tasks/<slug>.base, the branch it was cut from; older tasks: state's
+# feature=): close its tab, remove the worktree, delete the branch.
 # --abandon skips the merged check and force-deletes (only on the user's say-so).
 # A research topic (tasks/research-<slug>.block, no branch): close its tab,
 # force-remove its detached worktree .claude/worktrees/_research/<slug> and
@@ -13,7 +14,9 @@
 source "$(dirname "$0")/lib.sh"
 require_coordinator
 slug=${1:-}; check_slug "$slug"; abandon=${2:-}
-dir=$(state_dir); root=$(repo_root); feature=$(state_get feature)
+dir=$(state_dir); root=$(repo_root)
+# The branch the task was cut from (tasks/<slug>.base; older tasks: state's feature=).
+base=$(task_base "$slug")
 wt="$root/.claude/worktrees/$slug"
 
 # A research tab has no branch: nothing to merge, just close it.
@@ -30,8 +33,9 @@ if [ $research = 1 ]; then
 fi
 
 if [ "$abandon" != --abandon ] && [ $research = 0 ]; then
-  git -C "$root" merge-base --is-ancestor "$slug" "$feature" \
-    || die "$slug is not merged into $feature (merge first, or pass --abandon)"
+  [ -n "$base" ] || die "no base branch recorded for $slug"
+  git -C "$root" merge-base --is-ancestor "$slug" "$base" \
+    || die "$slug is not merged into $base, its base (merge it with the main checkout on $base, or pass --abandon)"
 fi
 
 # Ledger line, worked out before the branch goes. Never fails the script.
@@ -58,8 +62,8 @@ ledger_line() {
     sha=$(git -C "$root" rev-parse --short -q --verify "refs/heads/$slug" 2>/dev/null) || sha=-
   else
     status=merged
-    sha=$(git -C "$root" rev-list --merges --ancestry-path --reverse "$slug..$feature" 2>/dev/null | head -n1)
-    [ -n "$sha" ] || sha=$(git -C "$root" rev-parse "$feature" 2>/dev/null) || sha=-
+    sha=$(git -C "$root" rev-list --merges --ancestry-path --reverse "$slug..$base" 2>/dev/null | head -n1)
+    [ -n "$sha" ] || sha=$(git -C "$root" rev-parse "$base" 2>/dev/null) || sha=-
     [ "$sha" = - ] || sha=$(git -C "$root" rev-parse --short "$sha" 2>/dev/null) || sha=-
   fi
   refs="brief: briefs/$slug.md | report: reports/$slug-report.md"
@@ -80,7 +84,7 @@ if [ -f "$tabf" ]; then
   rm -f "$tabf"
 fi
 
-[ $research = 0 ] || rm -f "$dir/tasks/research-$slug.ref"
+if [ $research = 1 ]; then rm -f "$dir/tasks/research-$slug.ref"; else rm -f "$dir/tasks/$slug.base"; fi
 if [ -d "$wt" ]; then
   [ -L "$wt/node_modules" ] && rm "$wt/node_modules"
   # A research worktree is detached and read-only: nothing to keep.
@@ -109,7 +113,7 @@ if [ -n "$tsk_id" ]; then
     tsk_try status "$tsk_id" "done"
   else
     tsk_try status "$tsk_id" review --on you \
-      --done="$(printf 'Merged %s into %s: %s' "${sha:--}" "$feature" "${summary:-(no report)}" | one_line 200)"
+      --done="$(printf 'Merged %s into %s: %s' "${sha:--}" "$base" "${summary:-(no report)}" | one_line 200)"
   fi
   # Keep the link for board-watch.sh only while the task is really in review.
   if [ "$abandon" != --abandon ] && [ "$(tsk_task "$tsk_id" | jq -r .status 2>/dev/null)" = review ]; then

@@ -12,10 +12,41 @@ block=$(sed -n 's/^block=//p' "$state" | head -n1)
 # Coordinator pane only from here on: everything else stayed silent above.
 missing=""
 for c in rex jq; do command -v "$c" >/dev/null 2>&1 || missing="$missing $c"; done
-feature=$(sed -n 's/^feature=//p' "$state" | head -n1)
+last=$(sed -n 's/^feature=//p' "$state" | head -n1)
 root="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 
-ctx="This Rex pane ($REX_BLOCK) is the COORDINATOR for this repo; the feature branch is '$feature'. Before replying to anything, load the rex-coordinator:coordinator skill and follow it: you only coordinate, and every task goes to a fresh worker Claude in its own Rex tab and worktree. Plugin scripts are in $root/scripts. Start by running $root/scripts/status.sh to pick up tasks from earlier sessions."
+# The feature branch is the main checkout's current branch; state's feature=
+# is the last one seen. Read-only here: status.sh records a switch.
+main=$(dirname "$common")
+cur=$(git -C "$main" symbolic-ref --short -q HEAD 2>/dev/null) \
+  && git -C "$main" rev-parse --verify -q "refs/heads/$cur" >/dev/null 2>&1 || cur=
+if [ -n "$cur" ]; then
+  fb="the feature branch is '$cur' (the branch checked out in the main checkout $main; switching it is a plain git checkout there)"
+else
+  fb="the main checkout ($main) is on no branch (detached HEAD or rebase in progress), so the scripts use the last feature branch, '$last'"
+fi
+change=
+if [ -n "$cur" ] && [ -n "$last" ] && [ "$cur" != "$last" ]; then
+  # Open tasks still based on the old branch (no .base file = based on feature=).
+  on=
+  for f in "$common"/rex-coordinator/tasks/*.block "$common"/rex-coordinator/tasks/*.tsk "$common"/rex-coordinator/tasks/*.base; do
+    [ -f "$f" ] || continue
+    s=$(basename "$f"); s=${s%.*}
+    case $s in research-*) continue ;; esac
+    case " $on " in *" $s "*) continue ;; esac
+    b="$common/rex-coordinator/tasks/$s.base"
+    if [ -s "$b" ]; then [ "$(head -n1 "$b")" = "$last" ] || continue; fi
+    on="${on:+$on }$s"
+  done
+  change="
+
+The feature branch changed from '$last' to '$cur' since last seen. Tell the user."
+  [ -z "$on" ] || change="$change Open tasks still based on '$last': $on. Each merges into '$last' (with the main checkout on '$last'), never into '$cur'."
+fi
+
+ctx="This Rex pane ($REX_BLOCK) is the COORDINATOR for this repo; $fb.$change
+
+Before replying to anything, load the rex-coordinator:coordinator skill and follow it: you only coordinate, and every task goes to a fresh worker Claude in its own Rex tab and worktree. Plugin scripts are in $root/scripts. Start by running $root/scripts/status.sh to pick up tasks from earlier sessions."
 history="$common/rex-coordinator/history.md"
 if [ -s "$history" ]; then
   recent=$(grep '^- ' "$history" | tail -n 15)
