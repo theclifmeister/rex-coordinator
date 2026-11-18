@@ -172,6 +172,29 @@ tsk_link() { # tsk_link <slug>: "<uuid> T<n>" of its linked board task, or nothi
   head -n1 "$f"
 }
 
+thread_name() { # thread_name <branch>: a tsk thread name for it (letters, digits, - and .)
+  printf '%s' "$1" | tr -c 'A-Za-z0-9.-' '-' | tr -s '-' | sed 's/^[-.]*//; s/[-.]*$//'
+}
+
+# tsk_set_thread <uuid> <branch>: put a linked task on the branch's thread,
+# unless it already has one (the user's choice wins). Best-effort: tsk older
+# than 0.14.1 has no `edit --thread`, and only a note says so.
+tsk_set_thread() {
+  have_tsk || return 0
+  local t cur name out rc=0
+  name=$(thread_name "$2"); [ -n "$name" ] || return 0
+  t=$(tsk_task "$1") || return 0
+  cur=$(jq -r '.thread // ""' <<<"$t")
+  [ -z "$cur" ] || return 0
+  out=$(tsk edit "$1" --thread "$name" 2>&1) || rc=$?
+  case $rc in
+    0) ;;
+    2) tsk_warn "thread not set (tsk edit --thread needs tsk >= 0.14.1): $(head -n1 <<<"$out" | one_line 120)" ;;
+    *) tsk_warn "thread not set (exit $rc): $(one_line 160 <<<"$out")" ;;
+  esac
+  return 0
+}
+
 one_line() { # one_line [max]: stdin squashed to one line, cut to max chars
   tr '\r\n\t' '   ' | tr -s ' ' | sed 's/^ //; s/ $//' | cut -c1-"${1:-200}"
 }
