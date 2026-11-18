@@ -1,12 +1,14 @@
 {
   "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
   "name": "rex-coordinator",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Run one Rex pane as a coordinator: hand each task to a fresh worker Claude in its own Rex tab and git worktree, then merge results back.",
   "author": {
     "name": "Clifford van Slimming"
   },
   "skills": [
     "./skills/"
-  ]
+  ],
+  "homepage": "https://github.com/theclifmeister/rex-coordinator",
+  "repository": "https://github.com/theclifmeister/rex-coordinator"
 }
