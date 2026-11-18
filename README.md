@@ -42,14 +42,19 @@ A coordinator that is already running keeps using the version it started with un
 
 ### Developing this plugin
 
-Keep the checkout symlinked as a skills-directory plugin (`ln -s <checkout> ~/.claude/skills/rex-coordinator`). While the marketplace install is enabled it wins and the symlinked copy is not loaded. To run your local checkout instead:
+Use the marketplace install (`rex-coordinator@theclifmeister`, auto-update on) in every repo, **including this one**. Merging into `main` does not change the coordinator you are running: that happens only when a release bumps the version and auto-update (or `claude plugin update`) picks it up.
+
+To try unreleased changes, start a separate session that loads your checkout for that session only:
 
 ```
-claude plugin disable rex-coordinator@theclifmeister   # the symlinked checkout loads
-claude plugin enable rex-coordinator@theclifmeister    # back to the released version
+claude --plugin-dir <checkout>                   # or: CLAUDE_CODE_PLUGIN_DIRS=<checkout> claude
 ```
 
-Then `/reload-plugins` (or restart) in open panes. See `CLAUDE.md` for checks and the release process.
+A `--plugin-dir` copy takes precedence over the installed plugin of the same name: `claude plugin list` shows it as `rex-coordinator@inline` under "Session-only plugins", `claude plugin details rex-coordinator` resolves to it, and only its `SessionStart` hook runs. Other sessions keep the released version. Worker tabs run a plain `claude`, so they don't get the flag; they barely use the plugin anyway, since the coordinator's scripts come from its own session's plugin root.
+
+Don't keep a symlink at `~/.claude/skills/rex-coordinator` (older docs suggested one, with a disable/enable toggle). It never loads: an installed plugin with the same name takes the name even when it's disabled (`✘ Not loaded — the name "rex-coordinator" is already taken by an installed plugin`). So disabling the release only leaves you with nothing loaded. Remove the link with `rm ~/.claude/skills/rex-coordinator` (no trailing slash, so only the link goes and the checkout stays).
+
+See `CLAUDE.md` for checks and the release process.
 
 ## Use
 
