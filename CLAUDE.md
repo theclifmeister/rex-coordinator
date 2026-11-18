@@ -8,9 +8,25 @@ A Claude Code plugin (`.claude-plugin/plugin.json`) that turns one Rex terminal 
 
 ## Checking changes
 
-- Lint: `shellcheck scripts/*.sh hooks-handlers/session-start.sh` (scripts source `lib.sh`, so use `shellcheck -x` from `scripts/` to follow it).
-- Validate JSON: `jq . .claude-plugin/plugin.json hooks/hooks.json`.
+CI (`.github/workflows/ci.yml`, on PRs, pushes to `main`, and called by `release.yml`) runs these; run them locally before pushing:
+
+- Lint: `cd scripts && shellcheck -x ./*.sh ../hooks-handlers/session-start.sh ../tools/*.sh` (scripts source `lib.sh`; `-x` from `scripts/` follows it). Must be clean, not just warning-free.
+- Validate JSON: `jq empty .claude-plugin/plugin.json .claude-plugin/marketplace.json hooks/hooks.json`.
+- Manifests agree: the marketplace's single entry has the same `name` as `plugin.json`, `source: "./"`, and **no `version`** (`plugin.json` alone carries it, as `x.y.z`).
+- `claude plugin validate .` — non-strict on purpose: `--strict` fails because `CLAUDE.md` sits at the plugin root (the repo ships whole, `source: "./"`) and is "not loaded as project context". The LICENSE/icon lines are directory-submission advice and don't affect the result. Works without login.
+- CI also warns when `skills/`, `scripts/`, `hooks/`, `hooks-handlers/` or `plugin.json` changed since the last `v*` tag (or the PR base) without a version bump: users would not get that change.
 - Real testing means installing the plugin and running `/coordinator-start` in a Rex pane of some scratch git repo. Most scripts refuse to run outside the coordinator pane (`require_coordinator`).
+
+## Releasing
+
+This repo is also the `theclifmeister` marketplace (`.claude-plugin/marketplace.json`, one entry, `source: "./"`); users install `rex-coordinator@theclifmeister`. Claude Code ships an update only when the `plugin.json` `version` changes on `main`, so:
+
+- Before pushing `main` with plugin changes, run `tools/bump-version.sh patch` (`minor`/`major` only when the user says so). It refuses a dirty tree or a branch other than `main`, commits `Release vX.Y.Z` (only `plugin.json`), and prints the push command. It does not push or tag.
+- On that push, `.github/workflows/release.yml` runs CI, then creates tag `vX.Y.Z` and a GitHub Release (notes: `git log --first-parent` subjects since the previous `v*` tag) if that tag doesn't exist yet. It uses `GITHUB_TOKEN` only and never commits. `workflow_dispatch` reruns it; it refuses a commit that isn't on `main`.
+- Never make or push `v*` tags by hand, and never put `version` on the marketplace entry.
+- Everything committed ships in users' plugin cache, so keep repo-only files (`tools/`, `.github/`) small.
+
+Dev toggle: `~/.claude/skills/rex-coordinator` stays a symlink to the main checkout. With the marketplace install enabled, it wins and the symlink is not loaded; `claude plugin disable rex-coordinator@theclifmeister` makes the checkout load again (then `/reload-plugins`), `claude plugin enable …` goes back to the release.
 
 ## How the pieces fit
 
@@ -31,4 +47,4 @@ A Claude Code plugin (`.claude-plugin/plugin.json`) that turns one Rex terminal 
 - The message protocol strings (`REPORT DONE`, `REPORT BLOCKED`, `RESEARCH DONE`, `ACK <slug>-<n>`, `BOARD REPLY|SENT BACK|DONE|MOVED|IDLE`, and the report's first line `Summary: <one line>`) are matched across the brief template, `research.sh`, `tell.sh`, `watch.sh`, `finish-task.sh` and the playbook — change them everywhere at once.
 - Brief template placeholders (`{{SLUG}}`, `{{WORKTREE}}`, `{{FEATURE}}`, `{{COORDINATOR_BLOCK}}`, `{{REPORT}}`, `{{TSK_NUM}}`, `{{TSK_ID}}`, `{{BOARD_TASK}}`) are filled by `new-task.sh`; lines between `<!-- board -->` and `<!-- /board -->` are dropped when no board task is linked; `{{TODO...}}` is left for the coordinator.
 - Slugs must match `^[a-z0-9][a-z0-9._-]*$` (they become branch names and file names). Task slugs may not start with `research-`: `tasks/research-<topic>.*` belongs to research.
-- Skills reference scripts via `${CLAUDE_PLUGIN_ROOT}`; bump `version` in `plugin.json` when releasing.
+- Skills reference scripts via `${CLAUDE_PLUGIN_ROOT}`.

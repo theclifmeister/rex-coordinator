@@ -2,6 +2,45 @@
 
 Run one Rex pane as a **coordinator**: it never does the work itself, but hands every task to a fresh worker Claude in its own Rex tab and git worktree, then merges the results back into a feature branch.
 
+## Install
+
+In Claude Code:
+
+```
+/plugin marketplace add theclifmeister/rex-coordinator
+/plugin install rex-coordinator@theclifmeister
+```
+
+(or from a shell: `claude plugin marketplace add theclifmeister/rex-coordinator`, then `claude plugin install rex-coordinator@theclifmeister`).
+
+Auto-update is off by default for third-party marketplaces. Turn it on with `/plugin` → **Marketplaces** → `theclifmeister` → **Enable auto-update**, or in `~/.claude/settings.json`:
+
+```json
+"extraKnownMarketplaces": {
+  "theclifmeister": {
+    "source": { "source": "github", "repo": "theclifmeister/rex-coordinator" },
+    "autoUpdate": true
+  }
+}
+```
+
+### Updating
+
+Claude Code ships an update only when the `version` in `.claude-plugin/plugin.json` changes on `main`. With auto-update on, a new version lands in the background and applies after `/reload-plugins` or in the next session. By hand: `claude plugin marketplace update theclifmeister`, then `claude plugin update rex-coordinator@theclifmeister`. Releases and their notes are on the GitHub Releases page; tags are `vX.Y.Z`.
+
+A coordinator that is already running keeps using the version it started with until `/clear` or a new session. Coordinator state lives in the repo's git dir, not in the plugin, so updating loses nothing.
+
+### Developing this plugin
+
+Keep the checkout symlinked as a skills-directory plugin (`ln -s <checkout> ~/.claude/skills/rex-coordinator`). While the marketplace install is enabled it wins and the symlinked copy is not loaded. To run your local checkout instead:
+
+```
+claude plugin disable rex-coordinator@theclifmeister   # the symlinked checkout loads
+claude plugin enable rex-coordinator@theclifmeister    # back to the released version
+```
+
+Then `/reload-plugins` (or restart) in open panes. See `CLAUDE.md` for checks and the release process.
+
 ## Use
 
 - `/coordinator-start [feature-branch]` in the pane that should coordinate. It records that pane's `$REX_BLOCK` for the current repo.
@@ -13,6 +52,8 @@ Run one Rex pane as a **coordinator**: it never does the work itself, but hands 
 - `skills/coordinator/`: the playbook (`SKILL.md`) and the worker brief template.
 - `skills/coordinator-start/`, `skills/coordinator-stop/`: user-only commands.
 - `hooks/`, `hooks-handlers/session-start.sh`: the activation check.
+- `.claude-plugin/`: `plugin.json` (the version) and `marketplace.json` (the `theclifmeister` catalog).
+- `tools/bump-version.sh`, `.github/workflows/`: release tooling (see `CLAUDE.md`).
 - `scripts/`: `start`, `stop`, `status`, `new-task`, `launch-worker`, `watch`, `research`, `tell`, `finish-task`, `recall`, `board`, `board-watch`.
 
 State is per repo, in `<git-common-dir>/rex-coordinator/` (state, briefs, reports, research answers, task-to-block map, task-to-board links). It is never committed. `history.md` there is a one-line-per-task ledger written by `finish-task` (paths relative to that state dir); the coordinator sees its tail at session start, and `recall` searches it with the briefs, reports and research answers. Worktrees go in `.claude/worktrees/`, which is added to `.git/info/exclude`. Research (`research.sh <topic> [--ref <branch|commit>] "<question>"`) reads a detached worktree in `.claude/worktrees/_research/<topic>` at the feature branch tip or the given ref, never the main checkout's working tree; `finish-task` removes it.

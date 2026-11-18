@@ -1,0 +1,16 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "theclifmeister",
+  "description": "Claude Code plugins by theclifmeister",
+  "owner": {
+    "name": "Clifford van Slimming"
+  },
+  "plugins": [
+    {
+      "name": "rex-coordinator",
+      "source": "./",
+      "description": "Run one Rex pane as a coordinator: hand each task to a fresh worker Claude in its own Rex tab and git worktree, then merge results back.",
+      "category": "productivity"
+    }
+  ]
+}
