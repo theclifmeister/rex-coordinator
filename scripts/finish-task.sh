@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# finish-task.sh <slug> [--abandon] — after the task branch is merged into its
-# base (tasks/<slug>.base, the branch it was cut from; older tasks: state's
-# feature=): close its tab, remove the worktree, delete the branch.
+# finish-task.sh <slug> [--abandon] [--check "PASS|FAIL|SKIP <text>"]...
+# — after the task branch is merged into its base (tasks/<slug>.base, the
+# branch it was cut from; older tasks: state's feature=): close its tab, remove the
+# worktree, delete the branch.
 # --abandon skips the merged check and force-deletes (only on the user's say-so).
 # A research topic (tasks/research-<slug>.block, no branch): close its tab,
 # force-remove its detached worktree .claude/worktrees/_research/<slug> and
@@ -10,11 +11,25 @@
 # Appends one line per closed task to <state-dir>/history.md (the ledger);
 # its paths are relative to the state dir (older lines hold absolute ones).
 # Linked board task (tasks/<slug>.tsk): merged -> review on you with the merge
-# sha and summary, and the link moves to review/<slug>.tsk for board-watch.sh;
-# --abandon -> a note (date, branch, last sha), then done, and the link goes.
+# sha and summary, plus the report's checks (with their PASS/FAIL state, at
+# most REVIEW_MAX_CHECKS), then any --check given here (the coordinator's own,
+# e.g. the full checks on the merged branch), the report's open questions as
+# next and a "Report: <path>" notes line (once); a report without the layout's
+# "## Checks" gets the summary only. The link moves to review/<slug>.tsk for
+# board-watch.sh. --abandon -> a note (date, branch, last sha), then done, and
+# the link goes.
 source "$(dirname "$0")/lib.sh"
 require_coordinator
-slug=${1:-}; check_slug "$slug"; abandon=${2:-}
+slug=${1:-}; check_slug "$slug"; shift
+abandon='' extra_checks=()
+while [ $# -gt 0 ]; do
+  case $1 in
+    --abandon) abandon=--abandon; shift ;;
+    --check) [ $# -ge 2 ] || die "--check needs a value: \"PASS|FAIL|SKIP <text>\""; extra_checks+=("$2"); shift 2 ;;
+    --check=*) extra_checks+=("${1#--check=}"); shift ;;
+    *) die "usage: finish-task.sh <slug> [--abandon] [--check \"PASS|FAIL|SKIP <text>\"]..." ;;
+  esac
+done
 dir=$(state_dir); root=$(repo_root)
 # The branch the task was cut from (tasks/<slug>.base; older tasks: state's feature=).
 base=$(task_base "$slug")
@@ -109,16 +124,22 @@ if [ -n "$tsk_id" ]; then
     tsk_warn "not installed: $tsk_num left as it is"
   elif [ "$abandon" = --abandon ]; then
     note="Abandoned $(date +%F): branch $slug (last ${sha:--}) deleted, worktree removed."
-    if task=$(tsk_task "$tsk_id"); then
-      notes=$(jq -r '.notes // ""' <<<"$task")
-      grep -qF "$note" <<<"$notes" || tsk_try edit "$tsk_id" --append-notes="$note"
-    else
-      tsk_warn "could not read $tsk_num: abandon note not added"
-    fi
+    tsk_note_once "$tsk_id" "$note"
     tsk_try status "$tsk_id" "done"
   else
-    tsk_try status "$tsk_id" review --on you \
-      --done="$(printf 'Merged %s into %s: %s' "${sha:--}" "$base" "${summary:-(no report)}" | one_line 200)"
+    report="$dir/reports/$slug-report.md"
+    done_text=$(printf 'Merged %s into %s: %s' "${sha:--}" "$base" "${summary:-(no report)}" | one_line 200)
+    next='' checks=''
+    # The report's checks and open questions, only when it follows the layout.
+    if [ -f "$report" ] && checks=$(report_checks "$report"); then
+      checks=$(cap_checks "$REVIEW_MAX_CHECKS" <<<"$checks")
+      next=$(report_questions "$report")
+    fi
+    {
+      [ -z "$checks" ] || printf '%s\n' "$checks"
+      for c in ${extra_checks[@]+"${extra_checks[@]}"}; do check_spec "$c"; done
+    } | tsk_review "$tsk_id" "$done_text" "$next"
+    [ ! -f "$report" ] || tsk_note_once "$tsk_id" "Report: $report"
   fi
   # Keep the link for board-watch.sh only while the task is really in review.
   if [ "$abandon" != --abandon ] && [ "$(tsk_task "$tsk_id" | jq -r .status 2>/dev/null)" = review ]; then

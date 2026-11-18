@@ -212,6 +212,90 @@ research_reads() {
        }' "$1" 2>/dev/null || true
 }
 
+# --- Reports on the board ----------------------------------------------------
+# A worker's report (layout in brief-template.md): line 1 "Summary: <one line>",
+# then "## Done", "## Checks" (one "- PASS|FAIL|SKIP <text>" line per check),
+# "## Not done" and "## Open questions" (bullets, or "none"). finish-task.sh
+# mirrors it onto the linked task's review round; board.sh adds checks later.
+# A check spec is "PASS|FAIL|SKIP[:] <text>": PASS and FAIL become the check's
+# state (passed, failed); SKIP stays open with "SKIP: " kept in the text. tsk
+# caps each text at 4096 bytes, so texts are cut well below that.
+REVIEW_MAX_CHECKS=20
+
+report_section() { # report_section <file> <heading>: the lines under "## <heading>", up to the next "## "
+  awk -v h="## $2" '{ l = $0; sub(/[[:space:]]+$/, "", l) }
+    p && /^## / { exit } p { print } l == h { p = 1 }' "$1" 2>/dev/null || true
+}
+
+check_spec() { # check_spec <spec>: "<state>\t<text>" (passed|failed|open), nothing for empty text
+  local s w state
+  s=$(printf '%s' "$1" | one_line 100000)
+  w=$(sed -nE 's/^(PASS|FAIL|SKIP)(:|[[:space:]]).*/\1/p' <<<"$s")
+  [ -z "$w" ] || s=$(sed -E 's/^(PASS|FAIL|SKIP):?[[:space:]]*//' <<<"$s")
+  case $w in
+    PASS) state=passed ;;
+    FAIL) state=failed ;;
+    SKIP) state=open; s="SKIP: $s" ;;
+    *) state=open ;;
+  esac
+  [ -n "$s" ] || return 0
+  printf '%s\t%s\n' "$state" "$(one_line 300 <<<"$s")"
+}
+
+report_checks() { # report_checks <file>: its "## Checks" as check_spec lines; return 1 if it has none
+  local l out=''
+  while IFS= read -r l; do
+    out+=$(check_spec "$l")$'\n'
+  done < <(report_section "$1" Checks | sed -nE 's/^[-*][[:space:]]+((PASS|FAIL|SKIP)(:|[[:space:]]).*)$/\1/p')
+  [ -n "$out" ] || return 1
+  printf '%s' "$out"
+}
+
+report_questions() { # report_questions <file>: its open questions on one line ("; "-joined), nothing for "none"
+  local q
+  q=$(report_section "$1" "Open questions" | awk '
+    /^[[:space:]]*$/ { next }
+    /^[[:space:]]*([-*]|[0-9]+\.)[[:space:]]/ { sub(/^[[:space:]]*([-*]|[0-9]+\.)[[:space:]]+/, ""); if (n++) printf "; "; printf "%s", $0; next }
+    { sub(/^[[:space:]]+/, ""); printf "%s%s", (n++ ? " " : ""), $0 }' | one_line 1000)
+  grep -qiE '^(none|n/a|-)\.?$' <<<"$q" || printf '%s\n' "$q"
+}
+
+cap_checks() { # cap_checks [max]: the first max check_spec lines of stdin, then "… N more checks in the report"
+  awk -F'\t' -v m="${1:-$REVIEW_MAX_CHECKS}" 'NF >= 2 && $2 != "" { if (++n <= m) print; else more++ }
+    END { if (more) printf "open\t… %d more check%s in the report\n", more, (more > 1 ? "s" : "") }'
+}
+
+# tsk_review <uuid> <done> <next>: put the task in review on you with the
+# check_spec lines on stdin as its checks (in that order; an empty done or next
+# leaves the round's own), then mark each check's state. Repeating it edits the
+# open round, and tsk replaces its whole check list: pass every check each time.
+tsk_review() {
+  local id=$1 st tx i=0 c want cur
+  local -a args=(review --on you) states=()
+  [ -z "$2" ] || args+=(--done="$2")
+  [ -z "$3" ] || args+=(--next="$3")
+  while IFS=$'\t' read -r st tx; do
+    [ -n "$tx" ] || continue
+    args+=(--check="$tx"); states+=("$st")
+  done
+  have_tsk || return 0
+  tsk_try status "$id" "${args[@]}"
+  [ "$TSK_RC" = 0 ] && [ ${#states[@]} -gt 0 ] || return 0
+  cur=$(tsk_task "$id" | jq -r '.review.checks[]?.state' 2>/dev/null) || cur=
+  while IFS= read -r c; do
+    [ -n "$c" ] || continue
+    i=$((i + 1)); want=${states[$((i - 1))]:-}
+    [ -z "$want" ] || [ "$want" = "$c" ] || tsk_try checks "$id" set "$i" "$want"
+  done <<<"$cur"
+  return 0
+}
+
+tsk_note_once() { # tsk_note_once <uuid> <line>: append the line to its notes unless they hold it already
+  local t
+  t=$(tsk_task "$1") || { tsk_warn "could not read $1: note not added (appending is not safe to repeat blind)"; return 0; }
+  grep -qF -- "$2" <<<"$(jq -r '.notes // ""' <<<"$t")" || tsk_try edit "$1" --append-notes="$2"
+}
+
 # --- Claude Code's local-scope plugin records -------------------------------
 # With the plugin enabled at local scope (the repo's .claude/settings.local.json,
 # which Claude Code shares across all the repo's worktrees), every session that
