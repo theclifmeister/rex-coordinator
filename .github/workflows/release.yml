@@ -1,7 +1,8 @@
 name: release
 
 # Tags and releases v<version> when a new plugin.json version reaches main.
-# The version is bumped by hand (tools/bump-version.sh); nothing is committed here.
+# The version is bumped on a release/vX.Y.Z branch (tools/bump-version.sh) and
+# reaches main by pull request; nothing is committed here.
 on:
   push:
     branches: [main]
@@ -25,7 +26,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -41,6 +42,11 @@ jobs:
             echo "$tag already released"; exit 0
           fi
           prev=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)
-          notes=$(git log --first-parent --format='- %s (%h)' ${prev:+"$prev"..}HEAD | grep -v '^- Release v' || true)
+          # Every merge since the previous tag, newest first: the release PR's merge
+          # and the task merges inside it (--first-parent would hide those behind
+          # the PR merge's second parent). No merges: the plain commits instead.
+          range=${prev:+"$prev"..}HEAD
+          notes=$(git log --merges --format='- %s (%h)' "$range" | grep -v '^- Release v' || true)
+          [ -n "$notes" ] || notes=$(git log --no-merges --format='- %s (%h)' "$range" | grep -v '^- Release v' || true)
           gh release create "$tag" --target "$GITHUB_SHA" \
             --title "rex-coordinator $tag" --notes "${notes:-No changes listed.}"

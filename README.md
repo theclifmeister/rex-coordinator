@@ -2,6 +2,16 @@
 
 Run one Rex pane as a **coordinator**: it never does the work itself, but hands every task to a fresh worker Claude in its own Rex tab and git worktree, then merges the results back into a feature branch.
 
+## Requirements
+
+- Rex (`rex` on PATH; the coordinator and its workers run in Rex panes).
+- `git` ≥ 2.31 (worktrees, and `rev-parse --path-format`).
+- `jq`.
+- `bash` (3.2, as shipped with macOS, is enough).
+- Optional: [tsk](https://gettsk.sh) for the board integration; run `tsk setup` to install its Claude Code skill. Without it, everything board-related is skipped.
+
+Check with `scripts/doctor.sh` (in the plugin directory). `/coordinator-start` runs it and refuses to activate while a required tool is missing, and the coordinator pane gets a warning at session start if `rex` or `jq` disappears.
+
 ## Install
 
 In Claude Code:
@@ -54,12 +64,10 @@ Then `/reload-plugins` (or restart) in open panes. See `CLAUDE.md` for checks an
 - `hooks/`, `hooks-handlers/session-start.sh`: the activation check.
 - `.claude-plugin/`: `plugin.json` (the version) and `marketplace.json` (the `theclifmeister` catalog).
 - `tools/bump-version.sh`, `.github/workflows/`: release tooling (see `CLAUDE.md`).
-- `scripts/`: `start`, `stop`, `status`, `new-task`, `launch-worker`, `watch`, `research`, `tell`, `finish-task`, `recall`, `board`, `board-watch`.
+- `scripts/`: `doctor`, `start`, `stop`, `status`, `new-task`, `launch-worker`, `watch`, `research`, `tell`, `finish-task`, `recall`, `board`, `board-watch`.
 
 State is per repo, in `<git-common-dir>/rex-coordinator/` (state, briefs, reports, research answers, task-to-block map, task-to-board links). It is never committed. `history.md` there is a one-line-per-task ledger written by `finish-task` (paths relative to that state dir); the coordinator sees its tail at session start, and `recall` searches it with the briefs, reports and research answers. Worktrees go in `.claude/worktrees/`, which is added to `.git/info/exclude`. Research (`research.sh <topic> [--ref <branch|commit>] "<question>"`) reads a detached worktree in `.claude/worktrees/_research/<topic>` at the feature branch tip or the given ref, never the main checkout's working tree; `finish-task` removes it.
 
 ## tsk board
 
 When [tsk](https://gettsk.sh) is installed, every coordinator task is linked to a task on the board (`new-task.sh <slug> T12` links T12; without a T-number a task is created, and `--title "<text>"` is then required). Task slugs starting with `research-` are reserved for research topics. The coordinator alone writes to it: `launch-worker` sets it started (always `--no-dispatch`) and notes the worker's tab, `finish-task` puts it up for review with the merge sha (or, on `--abandon`, notes it and sets it done), and `board.sh` blocks and unblocks it. Workers may only add and tick steps on their own task, by UUID. `watch.sh` reports a board reply to a blocked task, and `board-watch.sh` reports when the user sends a review back or closes it. Every call passes `-p <repo root>` where it takes a scope, and a tsk failure only warns: git and Rex work never depend on the board. Without tsk, all of this is skipped.
-
-Requires: `rex`, `git`, `jq`, `bash`; optional: `tsk`.

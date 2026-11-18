@@ -1,6 +1,7 @@
 ---
 name: coordinator
 description: The Rex coordinator playbook — this pane only coordinates, handing each task to a fresh worker Claude in its own Rex tab and git worktree and merging results into the feature branch. Load ONLY when the SessionStart context says this Rex pane is the coordinator, or right after /coordinator-start. Never load when CLAUDE_ROLE=worker, and not for generic "coordinate agents" requests outside Rex (that's tsk-coordinator).
+compatibility: "Claude Code in a Rex terminal pane; requires rex, git >= 2.31, jq, bash; optional tsk"
 ---
 
 # Rex coordinator
@@ -51,7 +52,7 @@ A message starting `REPORT DONE`, `REPORT BLOCKED`, `RESEARCH DONE` or `ACK` com
 
 ## The board
 
-The tsk board is the user's; the coordinator is the only writer for its tasks, and only through the scripts or the commands named here. Always address a task by its UUID (from `board.sh <slug> show`) or pass `-p <repo root>`: a bare `tsk list`/`tsk add` in a worktree is a different project. Never start a task without `--no-dispatch`, never set `done` (except the abandon above), never `dispatch`, `clean`, `archive` or `trash`. Workers may only add and tick steps on their own task, by UUID.
+The tsk board is the user's; the coordinator is the only writer for its tasks, and only through the scripts or the commands named here. Always address a task by its UUID (from `board.sh <slug> show`) or pass `-p <repo root>`: a bare `tsk list`/`tsk add` in a worktree is a different project. Never start a task without `--no-dispatch`, never set `done` (except the abandon above), never `dispatch`, `clean`, `archive` or `trash`. Workers may only add and tick steps on their own task, by UUID. For board questions beyond what the scripts do, use the `tsk-cli` skill if it is installed.
 
 Board events arrive as a line from a background watcher:
 - `BOARD REPLY <slug> T<n>: <text>` (from `watch.sh`): the user answered the block on the board. Relay it with `tell.sh`, run `board.sh <slug> unblock`, restart `watch.sh <slug>`.
