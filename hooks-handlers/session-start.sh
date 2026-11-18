@@ -14,6 +14,17 @@ missing=""
 for c in rex jq; do command -v "$c" >/dev/null 2>&1 || missing="$missing $c"; done
 last=$(sed -n 's/^feature=//p' "$state" | head -n1)
 root="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
+# tsk >= 0.14.1 is required too (one `tsk --version` call, no jq). An
+# unparsable version is left to doctor.sh, which only warns about it.
+tskfix=
+# shellcheck source=../scripts/tsk-version.sh
+if [ -f "$root/scripts/tsk-version.sh" ] && source "$root/scripts/tsk-version.sh"; then
+  tsk_version_check
+  case $? in
+    1) missing="$missing tsk>=$TSK_MIN (not installed)" tskfix=$TSK_FIX ;;
+    2) missing="$missing tsk>=$TSK_MIN (this is ${TSK_VER:-unknown})" tskfix=$TSK_FIX ;;
+  esac
+fi
 
 # The feature branch is the main checkout's current branch; state's feature=
 # is the last one seen. Read-only here: status.sh records a switch.
@@ -57,7 +68,7 @@ $recent
 
 Older entries, briefs, reports and research answers: $root/scripts/recall.sh <word> [word...]."
 fi
-[ -z "$missing" ] || ctx="WARNING: rex-coordinator needs$missing on PATH; its scripts will fail until that is installed (check with $root/scripts/doctor.sh). Tell the user.
+[ -z "$missing" ] || ctx="WARNING: rex-coordinator needs$missing on PATH; its scripts will fail until that is fixed (check with $root/scripts/doctor.sh).${tskfix:+ Without tsk >= $TSK_MIN /coordinator-start refuses and board updates are skipped; $tskfix.} Tell the user.
 
 $ctx"
 if command -v jq >/dev/null 2>&1; then
