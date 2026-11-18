@@ -11,9 +11,10 @@
 # Appends one line per closed task to <state-dir>/history.md (the ledger);
 # its paths are relative to the state dir (older lines hold absolute ones).
 # Linked board task (tasks/<slug>.tsk): merged -> review on you with the merge
-# sha and summary, plus the report's checks (with their PASS/FAIL state, at
-# most REVIEW_MAX_CHECKS), then any --check given here (the coordinator's own,
-# e.g. the full checks on the merged branch), the report's open questions as
+# sha and summary, plus the report's checks (at most REVIEW_MAX_CHECKS), then
+# any --check given here (the coordinator's own, e.g. the full checks on the
+# merged branch), all open with the result in the text ("PASS: ..."; the ticks
+# are the user's), the report's open questions as
 # next and a "Report: <path>" notes line (once); a report without the layout's
 # "## Checks" gets the summary only. The link moves to review/<slug>.tsk for
 # board-watch.sh. --abandon -> a note (date, branch, last sha), then done, and

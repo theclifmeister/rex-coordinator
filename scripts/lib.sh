@@ -217,9 +217,10 @@ research_reads() {
 # then "## Done", "## Checks" (one "- PASS|FAIL|SKIP <text>" line per check),
 # "## Not done" and "## Open questions" (bullets, or "none"). finish-task.sh
 # mirrors it onto the linked task's review round; board.sh adds checks later.
-# A check spec is "PASS|FAIL|SKIP[:] <text>": PASS and FAIL become the check's
-# state (passed, failed); SKIP stays open with "SKIP: " kept in the text. tsk
-# caps each text at 4096 bytes, so texts are cut well below that.
+# A check spec is "PASS|FAIL|SKIP[:] <text>": the check is added open, with
+# the result kept in its text ("PASS: <text>"), because the ticks are the
+# user's (tsk: checks are the reviewer's). tsk caps each text at 4096 bytes,
+# so texts are cut well below that.
 REVIEW_MAX_CHECKS=20
 
 report_section() { # report_section <file> <heading>: the lines under "## <heading>", up to the next "## "
@@ -227,19 +228,17 @@ report_section() { # report_section <file> <heading>: the lines under "## <headi
     p && /^## / { exit } p { print } l == h { p = 1 }' "$1" 2>/dev/null || true
 }
 
-check_spec() { # check_spec <spec>: "<state>\t<text>" (passed|failed|open), nothing for empty text
-  local s w state
+check_spec() { # check_spec <spec>: "open\t<PASS|FAIL|SKIP>: <text>" (no word: the text as is), nothing for empty text
+  local s w
   s=$(printf '%s' "$1" | one_line 100000)
   w=$(sed -nE 's/^(PASS|FAIL|SKIP)(:|[[:space:]]).*/\1/p' <<<"$s")
-  [ -z "$w" ] || s=$(sed -E 's/^(PASS|FAIL|SKIP):?[[:space:]]*//' <<<"$s")
-  case $w in
-    PASS) state=passed ;;
-    FAIL) state=failed ;;
-    SKIP) state=open; s="SKIP: $s" ;;
-    *) state=open ;;
-  esac
+  if [ -n "$w" ]; then
+    s=$(sed -E 's/^(PASS|FAIL|SKIP):?[[:space:]]*//' <<<"$s")
+    [ -n "$s" ] || return 0
+    s="$w: $s"
+  fi
   [ -n "$s" ] || return 0
-  printf '%s\t%s\n' "$state" "$(one_line 300 <<<"$s")"
+  printf 'open\t%s\n' "$(one_line 300 <<<"$s")"
 }
 
 report_checks() { # report_checks <file>: its "## Checks" as check_spec lines; return 1 if it has none
@@ -266,9 +265,11 @@ cap_checks() { # cap_checks [max]: the first max check_spec lines of stdin, then
 }
 
 # tsk_review <uuid> <done> <next>: put the task in review on you with the
-# check_spec lines on stdin as its checks (in that order; an empty done or next
-# leaves the round's own), then mark each check's state. Repeating it edits the
-# open round, and tsk replaces its whole check list: pass every check each time.
+# "<state>\t<text>" lines on stdin as its checks (in that order; an empty done
+# or next leaves the round's own), then set each check whose state differs.
+# The plugin's own checks are always open (check_spec); other states are only
+# the user's marks, re-passed by board.sh. Repeating it edits the open round,
+# and tsk replaces its whole check list: pass every check each time.
 tsk_review() {
   local id=$1 st tx i=0 c want cur
   local -a args=(review --on you) states=()
