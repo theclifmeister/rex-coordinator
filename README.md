@@ -54,6 +54,8 @@ A `--plugin-dir` copy takes precedence over the installed plugin of the same nam
 
 Don't keep a symlink at `~/.claude/skills/rex-coordinator` (older docs suggested one, with a disable/enable toggle). It never loads: an installed plugin with the same name takes the name even when it's disabled (`✘ Not loaded — the name "rex-coordinator" is already taken by an installed plugin`). So disabling the release only leaves you with nothing loaded. Remove the link with `rm ~/.claude/skills/rex-coordinator` (no trailing slash, so only the link goes and the checkout stays).
 
+Don't enable the plugin at local scope as well (`claude plugin enable … --scope local` writes the repo's `.claude/settings.local.json`); the user-scope install is enough. Claude Code shares that file with every worktree of the repo, and with a local enable it adds a local install record to `~/.claude/plugins/installed_plugins.json` for each worker worktree a session starts in. These records outlive the worktree, and a bare `claude plugin update` may update one of them instead of the user-scope install. `doctor.sh` notes such an enable. To drop it, run `claude plugin uninstall rex-coordinator@theclifmeister --scope local --keep-data` in the main checkout: that removes only the local enable and the main checkout's local record, and the user-scope install stays. `finish-task` removes a closed worktree's record, and `scripts/plugin-records.sh` lists stale ones (`--fix` removes them).
+
 See `CLAUDE.md` for checks and the release process.
 
 ## Use
@@ -70,7 +72,7 @@ See `CLAUDE.md` for checks and the release process.
 - `hooks/`, `hooks-handlers/session-start.sh`: the activation check.
 - `.claude-plugin/`: `plugin.json` (the version) and `marketplace.json` (the `theclifmeister` catalog).
 - `tools/bump-version.sh`, `.github/workflows/`: release tooling (see `CLAUDE.md`).
-- `scripts/`: `doctor`, `start`, `stop`, `status`, `new-task`, `launch-worker`, `watch`, `research`, `tell`, `finish-task`, `recall`, `board`, `board-watch`.
+- `scripts/`: `doctor`, `start`, `stop`, `status`, `new-task`, `launch-worker`, `watch`, `research`, `tell`, `finish-task`, `recall`, `board`, `board-watch`, `plugin-records`.
 
 State is per repo, in `<git-common-dir>/rex-coordinator/` (state with the coordinator pane and the last seen feature branch, briefs, reports, research answers, task-to-block map, task bases, task-to-board links). It is never committed. `history.md` there is a one-line-per-task ledger written by `finish-task` (paths relative to that state dir); the coordinator sees its tail at session start, and `recall` searches it with the briefs, reports and research answers. Worktrees go in `.claude/worktrees/`, which is added to `.git/info/exclude`. Research (`research.sh <topic> [--ref <branch|commit>] "<question>"`) reads a detached worktree in `.claude/worktrees/_research/<topic>` at the feature branch tip (the main checkout's branch) or the given ref, never the main checkout's working tree; `finish-task` removes it.
 

@@ -20,6 +20,16 @@ if command -v git >/dev/null 2>&1; then
   esac
 fi
 command -v tsk >/dev/null 2>&1 || notes+=("tsk not installed (optional: the board integration is off)")
+# A local-scope enable (the repo's .claude/settings.local.json, shared by its
+# worktrees) makes Claude Code add an install record per worker worktree.
+if common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
+  root=${common%/*}
+  id=$(grep -Eo '"rex-coordinator@[^"]*"[[:space:]]*:[[:space:]]*true' "$root/.claude/settings.local.json" 2>/dev/null \
+       | head -n1 | cut -d'"' -f2)
+  if [ -n "$id" ]; then
+    notes+=("$root/.claude/settings.local.json enables $id at local scope, so Claude Code adds an install record for every worker worktree. With the user-scope install enabled it is not needed: in $root run 'claude plugin uninstall $id --scope local --keep-data' (removes only that enable and the main checkout's local record), then $(cd "$(dirname "$0")" && pwd)/plugin-records.sh --fix for old worktree records")
+  fi
+fi
 
 if [ "$quiet" = 0 ]; then
   for c in rex git jq tsk; do printf '%-4s %s\n' "$c" "$(command -v "$c" 2>/dev/null || echo MISSING)"; done

@@ -210,3 +210,70 @@ research_reads() {
          else print $1 "@" $2
        }' "$1" 2>/dev/null || true
 }
+
+# --- Claude Code's local-scope plugin records -------------------------------
+# With the plugin enabled at local scope (the repo's .claude/settings.local.json,
+# which Claude Code shares across all the repo's worktrees), every session that
+# starts in a worktree adds a local install record for that worktree's path to
+# installed_plugins.json. The record outlives the worktree, and a bare
+# `claude plugin update` may pick it instead of the user-scope one.
+
+plugin_records_file() { echo "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/installed_plugins.json"; }
+
+# plugin_local_records: "<plugin id><TAB><projectPath>" for every local-scope
+# record of rex-coordinator@<any marketplace>. Nothing without jq or the file.
+plugin_local_records() {
+  local f; f=$(plugin_records_file)
+  [ -f "$f" ] && command -v jq >/dev/null 2>&1 || return 0
+  jq -r '.plugins // {} | to_entries[] | select(.key | startswith("rex-coordinator@"))
+         | .key as $id | .value[]? | select(.scope == "local" and (.projectPath // "") != "")
+         | "\($id)\t\(.projectPath)"' "$f" 2>/dev/null || true
+}
+
+# plugin_drop_local_record <path>: remove rex-coordinator's local-scope
+# record(s) for <path> (absolute) with `claude plugin uninstall --scope local
+# --keep-data` run from <path>: only that path's record goes. A gone path is
+# made empty for the call and removed again. That command also drops
+# the plugin from the repo's .claude/settings.local.json, so the file is put
+# back as it was. Best-effort and silent; does nothing without claude or jq, or
+# without such a record. Prints "<id>" per record it removed. Always returns 0.
+plugin_drop_local_record() {
+  local path=$1 real ids id made='' top common settings='' bak='' existed=0
+  command -v claude >/dev/null 2>&1 && command -v jq >/dev/null 2>&1 || return 0
+  case $path in /*) ;; *) return 0 ;; esac
+  real=$(canon_dir "$path")
+  ids=$(plugin_local_records | awk -F'\t' -v p="$path" -v r="$real" '$2 == p || $2 == r {print $1}' | sort -u)
+  [ -n "$ids" ] || return 0
+  if [ ! -e "$path" ]; then
+    top=$path # the topmost directory that has to be made (removed again below)
+    while [ ! -e "$(dirname "$top")" ]; do top=$(dirname "$top"); done
+    mkdir -p "$path" 2>/dev/null || return 0
+    made=$top
+  fi
+  [ -d "$path" ] || return 0
+  # The settings file Claude Code uses for local scope: the main checkout's.
+  if common=$(git -C "$path" rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
+    settings="$(dirname "$common")/.claude/settings.local.json"
+    if [ -f "$settings" ]; then
+      existed=1; bak=$(mktemp "${TMPDIR:-/tmp}/rexc-settings.XXXXXX") && cp -p "$settings" "$bak" || bak=''
+    fi
+  fi
+  for id in $ids; do
+    if (cd "$path" && claude plugin uninstall "$id" --scope local --keep-data) </dev/null >/dev/null 2>&1 \
+       && ! plugin_local_records | awk -F'\t' -v i="$id" -v p="$path" -v r="$real" \
+              '$1 == i && ($2 == p || $2 == r) {f=1} END {exit !f}'; then
+      echo "$id"
+    fi
+  done
+  if [ -n "$settings" ]; then
+    if [ -n "$bak" ]; then
+      cmp -s "$bak" "$settings" 2>/dev/null || cat "$bak" > "$settings" 2>/dev/null || true
+      rm -f "$bak"
+    elif [ $existed = 0 ] && [ -f "$settings" ] \
+         && jq -e '. == {"enabledPlugins": {}}' "$settings" >/dev/null 2>&1; then
+      rm -f "$settings" # created by the uninstall, holding nothing
+    fi
+  fi
+  [ -z "$made" ] || rm -rf "$made"
+  return 0
+}
