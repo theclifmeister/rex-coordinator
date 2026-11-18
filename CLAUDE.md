@@ -15,7 +15,7 @@ CI (`.github/workflows/ci.yml`, on PRs, pushes to `main`, and called by `release
 - Manifests agree: the marketplace's single entry has the same `name` as `plugin.json`, `source: "./"`, and **no `version`** (`plugin.json` alone carries it, as `x.y.z`).
 - `claude plugin validate .` — non-strict on purpose: `--strict` fails because `CLAUDE.md` sits at the plugin root (the repo ships whole, `source: "./"`) and is "not loaded as project context". The icon line is directory-submission advice and doesn't affect the result. Works without login.
 - CI **fails** when `skills/`, `scripts/`, `hooks/`, `hooks-handlers/` or `plugin.json` changed since the last `v*` tag (or the PR base) without a version bump: users would not get that change. It skips when there is no tag/base. So a PR to `main` that changes the plugin must carry the bump, which is what the release branch does (below). CI installs `@anthropic-ai/claude-code@latest` for the validate step; never run that `npm install -g` locally.
-- Real testing means installing the plugin and running `/coordinator-start` in a Rex pane of some scratch git repo. Most scripts refuse to run outside the coordinator pane (`require_coordinator`).
+- Real testing means running `/coordinator-start` in a Rex pane of some scratch git repo, in a session started with `claude --plugin-dir <checkout>` (or with the release installed). Most scripts refuse to run outside the coordinator pane (`require_coordinator`).
 
 ## Releasing
 
@@ -33,7 +33,7 @@ On the merge, `.github/workflows/release.yml` runs CI, then creates tag `vX.Y.Z`
 - Never make or push `v*` tags by hand, and never put `version` on the marketplace entry.
 - Everything committed ships in users' plugin cache, so keep repo-only files (`tools/`, `.github/`) small.
 
-Dev toggle: `~/.claude/skills/rex-coordinator` stays a symlink to the main checkout. With the marketplace install enabled, it wins and the symlink is not loaded; `claude plugin disable rex-coordinator@theclifmeister` makes the checkout load again (then `/reload-plugins`), `claude plugin enable …` goes back to the release.
+Dev setup: the marketplace install (auto-update on) runs in every repo, this one too, so merging into `main` changes nothing live until a release ships. To try unreleased changes, start a separate session with `claude --plugin-dir <checkout>` (or `CLAUDE_CODE_PLUGIN_DIRS=<checkout>`): that copy (`rex-coordinator@inline`) takes precedence over the installed one for that session only, including its `SessionStart` hook. Workers launched from it run plain `claude` and get the installed plugin; it's not clear whether an exported `CLAUDE_CODE_PLUGIN_DIRS` reaches them (`rex run` uses the login-shell environment), and that doesn't matter because workers don't use the plugin's scripts. A `~/.claude/skills/rex-coordinator` symlink is obsolete: an installed plugin with the same name blocks it even when disabled, so the old disable/enable toggle left nothing loaded; `rm` the link. When testing plugin commands in a throwaway `HOME`, never use local or project scope: those write `.claude/settings*.json` in the repo (the main checkout, even from a worktree), not under `HOME`.
 
 ## How the pieces fit
 
