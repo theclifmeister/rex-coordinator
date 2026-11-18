@@ -125,8 +125,9 @@ check_slug() {
   [[ "${1:-}" =~ ^[a-z0-9][a-z0-9._-]*$ ]] || die "slug must be lowercase letters, digits, . _ - (got '${1:-}')"
 }
 
-# --- tsk board (optional) -------------------------------------------------
-# Every board call is best-effort: skipped when tsk is not installed, and a
+# --- tsk board --------------------------------------------------------------
+# doctor.sh requires tsk >= 0.14.1 at activation, but every board call stays
+# best-effort: skipped when tsk is not (or no longer) installed, and a
 # failure only warns (to stderr), never fails the git/Rex work. Project-scoped
 # calls always pass -p "$(repo_root)"; starts always pass --no-dispatch.
 # A coordinator task's board link is tasks/<slug>.tsk while it is open, and

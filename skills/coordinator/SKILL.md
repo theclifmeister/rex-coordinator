@@ -1,7 +1,7 @@
 ---
 name: coordinator
 description: The Rex coordinator playbook — this pane only coordinates, handing each task to a fresh worker Claude in its own Rex tab and git worktree and merging results into the feature branch. Load ONLY when the SessionStart context says this Rex pane is the coordinator, or right after /coordinator-start. Never load when CLAUDE_ROLE=worker, and not for generic "coordinate agents" requests outside Rex (that's tsk-coordinator).
-compatibility: "Claude Code in a Rex terminal pane; requires rex, git >= 2.31, jq, bash; optional tsk"
+compatibility: "Claude Code in a Rex terminal pane; requires rex, git >= 2.31, jq, bash, tsk >= 0.14.1"
 ---
 
 # Rex coordinator
@@ -28,7 +28,7 @@ Scripts live in `${CLAUDE_PLUGIN_ROOT}/scripts` (the SessionStart context gives 
 ## Handing out a task
 
 1. **Recall first:** `recall.sh <word> [word...]` with a few key words for the task (see Memory).
-2. **Worktree, brief and board task:** `new-task.sh <task-slug> [T<n>] [--title "<text>"]`. Slugs starting with `research-` are reserved for research topics and refused. It creates branch `<task-slug>` and `.claude/worktrees/<task-slug>` off the feature branch (and symlinks `node_modules` if present; add other run-time needs by hand, never commit them). It writes a brief skeleton to `briefs/<task-slug>.md` with the worker line, the paths and the report-back contract already filled in. Every task gets a board task: pass the T-number when the user named one (it must be this repo's and not done, or the script refuses), otherwise it creates one, and then `--title "<text>"` is required (a real title, verb-first): without it the script refuses before creating anything. Without tsk installed no title is needed. The link goes to `tasks/<task-slug>.tsk`, and the board task's title, notes and steps are copied into the brief, with the worker's board limits. The board task's thread becomes the feature branch (as a thread name: `feature/x_y` → `feature-x-y`): set when it is created, and on a linked task only when it has no thread yet, so a thread the user chose stays. Setting it on a linked task needs tsk ≥ 0.14.1; older tsk only warns.
+2. **Worktree, brief and board task:** `new-task.sh <task-slug> [T<n>] [--title "<text>"]`. Slugs starting with `research-` are reserved for research topics and refused. It creates branch `<task-slug>` and `.claude/worktrees/<task-slug>` off the feature branch (and symlinks `node_modules` if present; add other run-time needs by hand, never commit them). It writes a brief skeleton to `briefs/<task-slug>.md` with the worker line, the paths and the report-back contract already filled in. Every task gets a board task: pass the T-number when the user named one (it must be this repo's and not done, or the script refuses), otherwise it creates one, and then `--title "<text>"` is required (a real title, verb-first): without it the script refuses before creating anything. If tsk has gone missing mid-session the board steps are skipped (with a warning) and no title is needed. The link goes to `tasks/<task-slug>.tsk`, and the board task's title, notes and steps are copied into the brief, with the worker's board limits. The board task's thread becomes the feature branch (as a thread name: `feature/x_y` → `feature-x-y`): set when it is created, and on a linked task only when it has no thread yet, so a thread the user chose stays. Setting it on a linked task uses `tsk edit --thread` (tsk ≥ 0.14.1, which `/coordinator-start` requires).
 3. **Fill in the brief.** Replace every `{{TODO}}`: Goal, Context (with anything `recall.sh` turned up), Scope, the project's safety rules verbatim, and Checks. Derive Goal and Scope from the board task's notes, but leave the copied notes as they are: they are the user's words. The brief is the worker's only context; write it like a handover to a capable peer.
 4. **Launch:** `launch-worker.sh <task-slug>`. It refuses while any `{{TODO}}` remains, starts `env CLAUDE_ROLE=worker claude` in a new background tab in the worktree, and prints the worker's block ID. It then sets the board task `started --no-dispatch` and appends the block, branch, worktree and brief to its notes (once).
 5. **Fallback watch:** run `watch.sh <task-slug>` with `run_in_background`. The worker's Rex message is the main signal; this catches a worker that dies first, and a reply the user gives on the board while the task is blocked. Never poll in the foreground.
@@ -64,7 +64,7 @@ Board events arrive as a line from a background watcher:
 - `BOARD MOVED <slug> T<n>: <status>`: the user moved it out of review some other way. Tell the user and ask.
 - `BOARD IDLE`: nothing linked is in review any more.
 
-After each `board-watch.sh` event, start it again while `status.sh` still shows a `[<slug>, merged]` task. If tsk is not installed, every board step is skipped with a warning and the flow works as before.
+After each `board-watch.sh` event, start it again while `status.sh` still shows a `[<slug>, merged]` task. tsk ≥ 0.14.1 is required (`/coordinator-start` refuses without it, and the session-start context warns if it goes missing or is too old). If it does disappear mid-session, every board step is skipped with a warning and the git/Rex flow keeps working; tell the user to fix it (`tsk update`, or https://gettsk.sh).
 
 ## Telling a worker something
 

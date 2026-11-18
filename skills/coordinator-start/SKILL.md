@@ -3,7 +3,7 @@ name: coordinator-start
 description: Make this Rex pane the coordinator for the current repo (optionally naming the feature branch). User-invoked only.
 disable-model-invocation: true
 argument-hint: "[feature-branch]"
-compatibility: "Claude Code in a Rex terminal pane; requires rex, git >= 2.31, jq, bash; optional tsk"
+compatibility: "Claude Code in a Rex terminal pane; requires rex, git >= 2.31, jq, bash, tsk >= 0.14.1"
 ---
 
 Make this pane the repo's coordinator:
