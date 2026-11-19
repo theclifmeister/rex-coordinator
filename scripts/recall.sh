@@ -5,6 +5,8 @@
 # --board also searches this repo's tsk board tasks (live, done and archived):
 # title, notes, steps, blocks and their replies, reviews and their feedback,
 # past rounds. Slow: one tsk call per task. Skipped when tsk is not installed.
+# Workspace mode: the board tasks of the workspace folder's project and of its
+# repos' own projects (tsk list --all, filtered by path).
 source "$(dirname "$0")/lib.sh"
 usage="usage: recall.sh [--board] <word> [word...]"
 board=0 words=()
@@ -53,18 +55,22 @@ fi
 
 searched=$dir
 if [ $board = 1 ]; then
-  root=$(repo_root)
+  ws=; if ws=$(ws_root); then root=$ws; else root=$(repo_root); fi
   if ! have_tsk; then
     echo "Board: tsk not installed, not searched."
   else
     # Every task of this repo's project: live, done, archived (rows are short;
     # notes, steps, replies and past rounds need one `tsk list <uuid>` each).
+    # Workspace mode: every project, then only the workspace's and its repos'.
+    scope=(-p "$root"); [ -z "$ws" ] || scope=(--all)
     ids=$(for f in "" --done --archived; do
             # shellcheck disable=SC2086 # $f is one flag or nothing
-            tsk list -p "$root" $f --json 2>/dev/null || echo '[]'
-          done | jq -rs '[.[] | arrays | .[]] | unique_by(.id) | sort_by(.number) | .[].id' 2>/dev/null || true)
+            tsk list "${scope[@]}" $f --json 2>/dev/null || echo '[]'
+          done | jq -rs --arg ws "$ws" '[.[] | arrays | .[]
+              | select($ws == "" or ((.project // "") as $p | $p == $ws or ($p | startswith($ws + "/"))))]
+              | unique_by(.id) | sort_by(.number) | .[].id' 2>/dev/null || true)
     n_ids=$(grep -c . <<<"$ids" || true)
-    echo "Board: searching $n_ids board tasks of $root (one tsk call each)…"
+    echo "Board: searching $n_ids board tasks of $root${ws:+ and its repos} (one tsk call each)…"
     searched+=" and $n_ids board tasks"
     tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
     for id in $ids; do

@@ -3,6 +3,9 @@ You are a worker, not the coordinator. Ignore any coordinator-flow instructions:
 # Task: {{SLUG}}
 
 - Worktree: `{{WORKTREE}}` (branch `{{SLUG}}`, cut from `{{FEATURE}}`)
+<!-- workspace -->
+- Repo: `{{REPO}}`, in the workspace `{{WORKSPACE}}` (a folder of separate git repos)
+<!-- /workspace -->
 - Coordinator's Rex block: `{{COORDINATOR_BLOCK}}`
 <!-- board -->
 - Board task: `{{TSK_NUM}}` (UUID `{{TSK_ID}}`; see "Board task" below)
@@ -28,6 +31,9 @@ You are a worker, not the coordinator. Ignore any coordinator-flow instructions:
 
 - Work only in `{{WORKTREE}}`. Commit on branch `{{SLUG}}` only.
 - Never push, never merge, never rebase other branches, never touch other worktrees.
+<!-- workspace -->
+- Don't touch the workspace's other repos: this task is only in `{{REPO}}`. Read them if the task needs it; if a change there is needed, say so in the report.
+<!-- /workspace -->
 - Ask (REPORT BLOCKED, below) before anything that spends significant time or money.
 
 ## Checks
