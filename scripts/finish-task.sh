@@ -32,7 +32,8 @@
 # GitHub kept is only named (git push origin --delete is a push: not run).
 # The ledger's sha is the PR's merge commit and the line ends "| pr: <url>".
 # The board task stays in review (land-task.sh put it there): only a
-# "Merged ..." notes line. --abandon on it prints "gh pr close <url>" (not run).
+# "Merged ..." notes line, and any --check goes on through board.sh check.
+# --abandon on it: a note, done, and "gh pr close <url>" printed (not run).
 # --close-tab: only close the worker's tab (a pr task whose PR checks passed);
 # the worktree and branch stay until the PR is merged.
 source "$(dirname "$0")/lib.sh"
@@ -213,6 +214,8 @@ if [ -n "$rev_id" ] && have_tsk; then
     rm -f "$dir/review/$slug.tsk"
   else
     tsk_note_once "$rev_id" "Merged $(date +%F) as ${sha:--} into ${ws:+$(task_repo "$slug")/}$base (PR $pr_url)."
+    # The coordinator's --checks go onto the open round, keeping the user's marks.
+    [ ${#extra_checks[@]} = 0 ] || "$(dirname "$0")/board.sh" "$slug" check "${extra_checks[@]}" || true
   fi
 fi
 if [ -n "$tsk_id" ]; then

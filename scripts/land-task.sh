@@ -175,7 +175,7 @@ if [ $mirror = 1 ]; then
       checks=$(cap_checks "$REVIEW_MAX_CHECKS" <<<"$checks")
       next=$(report_questions "$report")
     fi
-    printf '%s' "$checks" | tsk_review "$tsk_id" "$done_text" "$next"
+    { [ -z "$checks" ] || printf '%s\n' "$checks"; } | tsk_review "$tsk_id" "$done_text" "$next"
     tsk_note_once "$tsk_id" "PR: $pr_url"
     [ ! -f "$report" ] || tsk_note_once "$tsk_id" "Report: $report"
     if [ "$(tsk_task "$tsk_id" | jq -r .status 2>/dev/null)" = review ]; then
