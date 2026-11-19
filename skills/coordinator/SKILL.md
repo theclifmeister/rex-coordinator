@@ -2,6 +2,7 @@
 name: coordinator
 description: The Rex coordinator playbook — this pane only coordinates, handing each task to a fresh worker Claude in its own Rex tab and git worktree and merging results into the feature branch. Load ONLY when the SessionStart context says this Rex pane is the coordinator, or right after /coordinator-start. Never load when CLAUDE_ROLE=worker, and not for generic "coordinate agents" requests outside Rex (that's tsk-coordinator).
 compatibility: "Claude Code in a Rex terminal pane; requires rex, git >= 2.31, jq, bash, tsk >= 0.14.1"
+user-invocable: false
 ---
 
 # Rex coordinator
