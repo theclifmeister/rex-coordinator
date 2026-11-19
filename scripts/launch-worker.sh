@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # launch-worker.sh <slug> — start a fresh worker Claude in a new Rex tab, in
 # the task's worktree, without taking focus. Prints the worker's block ID.
+# Titles the tab "<T-number>: <branch>" (just "<branch>" without a board task).
 # With a linked board task: sets it started (--no-dispatch) and, once, appends
 # the block, branch, worktree and brief to its notes.
 source "$(dirname "$0")/lib.sh"
@@ -15,15 +16,20 @@ grep -q '{{TODO' "$brief" && die "brief still has {{TODO}} placeholders: $brief"
 [ -f "$dir/tasks/$slug.block" ] && die "$slug already has a worker: $(cat "$dir/tasks/$slug.block")"
 
 msg="You are a worker, not the coordinator. Read $brief and follow it. Always report back as it says, also when you are blocked or stop early."
-out=$(rex run -s "$(state_get session)" --interactive --focus=false --json \
+session=$(state_get session)
+out=$(rex run -s "$session" --interactive --focus=false --json \
         -c "$wt" --label "$slug" -- env CLAUDE_ROLE=worker claude --name "$slug" "$msg")
 block=$(echo "$out" | jq -r '.block_ids[0] // empty' 2>/dev/null) || block=
 [ -n "$block" ] && [ "$block" != null ] || die "could not read block ID from: $out"
 echo "$block" > "$dir/tasks/$slug.block"
 echo "$block"
 
+# Tab title "<T-number>: <branch>" (just "<branch>" without a board task).
+read -r tsk_id tsk_num _ <<<"$(tsk_link "$slug")" || true
+window=$(echo "$out" | jq -r '.window_id // empty' 2>/dev/null) || window=
+rex_title_window "$session" "$window" "${tsk_num:+$tsk_num: }$slug"
+
 # Board mirror, only after the tab is up. Never fails the launch.
-read -r tsk_id _ <<<"$(tsk_link "$slug")" || true
 if [ -n "${tsk_id:-}" ] && have_tsk; then
   tsk_try status "$tsk_id" started --no-dispatch
   if task=$(tsk_task "$tsk_id"); then

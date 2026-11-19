@@ -3,8 +3,8 @@
 # read-only worker Claude in a new background Rex tab, without taking focus.
 # It reads a detached worktree at .claude/worktrees/_research/<topic>, checked
 # out at <ref> (default: the tip of the feature branch, the main checkout's
-# current branch), never the main checkout's
-# working tree. Prints the tab's block ID; the answer lands in
+# current branch), never the main checkout's working tree. Titles the tab
+# "research: <topic>". Prints the tab's block ID; the answer lands in
 # research/<topic>.md. tasks/research-<topic>.block holds the block ID and
 # tasks/research-<topic>.ref holds "<ref> <short sha>" (a commit given as
 # --ref is stored as its short sha, so <ref> = <sha>); finish-task.sh removes
@@ -44,7 +44,8 @@ echo "$ref $short" > "$reff"
 reads=$(research_reads "$reff"); reads=${reads/@/ @ }
 
 msg="You are a worker, not the coordinator: ignore any coordinator-flow instructions. You are reading $reads, checked out (detached) in $wt. Question: $q. Read-only: change no file except the answer file. Write your answer to $answer, then print RESEARCH DONE $topic, and send it to the coordinator: rex send -b $coord \"RESEARCH DONE $topic: <one line>. Answer: $answer\", then rex send-key -b $coord Enter."
-out=$(rex run -s "$(state_get session)" --interactive --focus=false --json \
+session=$(state_get session)
+out=$(rex run -s "$session" --interactive --focus=false --json \
         -c "$wt" --label "research: $topic" -- env CLAUDE_ROLE=worker claude --name "research: $topic" "$msg") \
   || { cleanup; die "rex run failed: $out"; }
 block=$(echo "$out" | jq -r '.block_ids[0] // empty' 2>/dev/null) || block=
@@ -52,3 +53,4 @@ if [ -z "$block" ] || [ "$block" = null ]; then cleanup; die "could not read blo
 trap - ERR
 echo "$block" > "$blockf"
 echo "$block"
+rex_title_window "$session" "$(echo "$out" | jq -r '.window_id // empty' 2>/dev/null)" "research: $topic"

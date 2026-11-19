@@ -185,6 +185,16 @@ tsk_link() { # tsk_link <slug>: "<uuid> T<n>" of its linked board task, or nothi
   head -n1 "$f"
 }
 
+# rex_title_window <session> <window> <title>: name a Rex tab (window label).
+# The label is Rex's own state, so Claude Code's OSC title writes in the tab
+# don't replace it. Best-effort: a failure only warns.
+rex_title_window() {
+  [ -n "$2" ] && [ "$2" != null ] || { echo "rex-coordinator: no window ID: tab not titled '$3'" >&2; return 0; }
+  rex window rename -s "$1" "$2" "$3" >/dev/null 2>&1 \
+    || echo "rex-coordinator: could not title tab $2 '$3'" >&2
+  return 0
+}
+
 thread_name() { # thread_name <branch>: a tsk thread name for it (letters, digits, - and .)
   printf '%s' "$1" | tr -c 'A-Za-z0-9.-' '-' | tr -s '-' | sed 's/^[-.]*//; s/[-.]*$//'
 }
