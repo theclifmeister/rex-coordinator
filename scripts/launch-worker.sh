@@ -9,7 +9,7 @@ require_coordinator
 slug=${1:-}; check_slug "$slug"
 dir=$(state_dir); root=$(repo_root)
 wt="$root/.claude/worktrees/$slug"
-brief="$dir/briefs/$slug.md"
+brief=$(state_file brief "$slug")
 [ -d "$wt" ] || die "no worktree for $slug (run new-task.sh first)"
 [ -f "$brief" ] || die "no brief at $brief"
 grep -q '{{TODO' "$brief" && die "brief still has {{TODO}} placeholders: $brief"

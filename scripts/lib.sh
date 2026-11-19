@@ -410,3 +410,42 @@ plugin_drop_local_record() {
   [ -z "$made" ] || rm -rf "$made"
   return 0
 }
+
+# --- dated state files ----------------------------------------------------
+# Briefs, reports, research answers and messages carry a YYMMDD prefix (local
+# date) so `ls` sorts them by age. A task's or research topic's date is the
+# day it was created, kept in tasks/<slug>.date or tasks/research-<topic>.date
+# (new-task.sh, research.sh), so all files of one task share it. Older files
+# have no prefix and are never renamed: lookups go through state_file.
+
+today_stamp() { date +%y%m%d; }
+
+dated_match() { # dated_match <dir> <name>: the newest existing <dir>/YYMMDD-<name>, if any
+  local f last=
+  for f in "$1"/[0-9][0-9][0-9][0-9][0-9][0-9]-"$2"; do [ -e "$f" ] && last=$f; done
+  [ -z "$last" ] || echo "$last"
+}
+
+state_file() { # state_file brief|report|research <slug|topic>: path of that file
+  # Dated when the task has a date (tasks/<key>.date), unless only the old
+  # undated file exists; without a date, the undated file if it exists, else
+  # the newest dated one, else the undated path.
+  local dir sub name key d f
+  dir=$(state_dir)
+  case $1 in
+    brief)    sub=briefs;   name=$2.md;        key=$2 ;;
+    report)   sub=reports;  name=$2-report.md; key=$2 ;;
+    research) sub=research; name=$2.md;        key=research-$2 ;;
+    *) die "state_file: unknown kind '$1'" ;;
+  esac
+  d=$(head -n1 "$dir/tasks/$key.date" 2>/dev/null) || d=
+  if [[ $d =~ ^[0-9]{6}$ ]]; then
+    f="$dir/$sub/$d-$name"
+    [ -e "$f" ] || [ ! -e "$dir/$sub/$name" ] || f="$dir/$sub/$name"
+  else
+    f="$dir/$sub/$name"
+    [ -e "$f" ] || f=$(dated_match "$dir/$sub" "$name")
+    [ -n "$f" ] || f="$dir/$sub/$name"
+  fi
+  echo "$f"
+}

@@ -5,7 +5,7 @@
 # out at <ref> (default: the tip of the feature branch, the main checkout's
 # current branch), never the main checkout's working tree. Titles the tab
 # "research: <topic>". Prints the tab's block ID; the answer lands in
-# research/<topic>.md. tasks/research-<topic>.block holds the block ID and
+# research/YYMMDD-<topic>.md (the date kept in tasks/research-<topic>.date). tasks/research-<topic>.block holds the block ID and
 # tasks/research-<topic>.ref holds "<ref> <short sha>" (a commit given as
 # --ref is stored as its short sha, so <ref> = <sha>); finish-task.sh removes
 # both and the worktree.
@@ -21,9 +21,9 @@ fi
 q="$*"; [ -n "$q" ] || die "$usage"
 [ -n "$ref" ] || ref=$(feature_branch) || die "no feature branch (main checkout on no branch, none recorded) and no --ref given"
 dir=$(state_dir); coord=$(state_get block); root=$(repo_root)
-answer="$dir/research/$topic.md"
 wt="$root/.claude/worktrees/_research/$topic"
 blockf="$dir/tasks/research-$topic.block"; reff="$dir/tasks/research-$topic.ref"
+datef="$dir/tasks/research-$topic.date"
 
 sha=$(git -C "$root" rev-parse --verify -q "$ref^{commit}") \
   || die "not a branch or commit: $ref"
@@ -37,10 +37,11 @@ short=$(git -C "$root" rev-parse --short "$sha")
 # branch can't be checked out in two worktrees.
 mkdir -p "$dir/tasks" "$dir/research" "$(dirname "$wt")"
 git -C "$root" worktree add -q --detach "$wt" "$sha" || die "could not create worktree $wt"
-cleanup() { git -C "$root" worktree remove --force "$wt" >/dev/null 2>&1 || true; rm -f "$reff"; }
+cleanup() { git -C "$root" worktree remove --force "$wt" >/dev/null 2>&1 || true; rm -f "$reff" "$datef"; }
 trap 'cleanup' ERR
 [ -d "$root/node_modules" ] && [ ! -e "$wt/node_modules" ] && ln -s "$root/node_modules" "$wt/node_modules"
 echo "$ref $short" > "$reff"
+today_stamp > "$datef"; answer=$(state_file research "$topic")
 reads=$(research_reads "$reff"); reads=${reads/@/ @ }
 
 msg="You are a worker, not the coordinator: ignore any coordinator-flow instructions. You are reading $reads, checked out (detached) in $wt. Question: $q. Read-only: change no file except the answer file. Write your answer to $answer, then print RESEARCH DONE $topic, and send it to the coordinator: rex send -b $coord \"RESEARCH DONE $topic: <one line>. Answer: $answer\", then rex send-key -b $coord Enter."

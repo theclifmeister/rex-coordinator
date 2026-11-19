@@ -16,7 +16,7 @@ research=0
 f="$dir/tasks/$slug.block"
 [ -f "$f" ] || { f="$dir/tasks/research-$slug.block"; research=1; }
 block=$(cat "$f" 2>/dev/null) || die "no task $slug"
-report="$dir/reports/$slug-report.md"; answer="$dir/research/$slug.md"
+report=$(state_file report "$slug"); answer=$(state_file research "$slug")
 marker="^[[:space:]]*(⏺[[:space:]]*)?REPORT (DONE|BLOCKED) ${slug//./\\.}([^a-z0-9._-]|$)"
 
 # Board: the reply count of the block open now is the baseline; a block that
