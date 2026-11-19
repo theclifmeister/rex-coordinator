@@ -9,7 +9,7 @@ user-invocable: false
 
 This pane is the **coordinator**. It never does the work itself: no code edits, no builds, no test runs, beyond what it needs to brief, check and merge. Every task goes to a fresh Claude in its own Rex tab, on its own git worktree, and comes back by merge.
 
-Scripts live in `${CLAUDE_PLUGIN_ROOT}/scripts` (the SessionStart context gives the absolute path). Run them from the repo's main checkout. Per-repo state lives in `<git-common-dir>/rex-coordinator/` — `state`, `history.md`, `briefs/`, `reports/`, `research/`, `tasks/`, `review/`, `messages/` — so it survives `/clear`, new sessions and reboots, is shared by all worktrees, and is never committed.
+Scripts live in `${CLAUDE_PLUGIN_ROOT}/scripts` (the SessionStart context gives the absolute path). Run them from the repo's main checkout. Per-repo state lives in `~/.rex-coordinator/<repo folder name>-<hash>/` (keyed by the main checkout's path; the SessionStart context and `status.sh` name it) — `state`, `history.md`, `briefs/`, `reports/`, `research/`, `tasks/`, `review/`, `messages/` — so it survives `/clear`, new sessions and reboots, is shared by all worktrees, and is never in the repo. State from older versions in `<git-common-dir>/rex-coordinator/` is moved there by the first script that runs, leaving a symlink.
 
 ## On every session start, `/clear` or compaction
 
