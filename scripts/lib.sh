@@ -298,6 +298,89 @@ feature_pr_file() { # feature_pr_file <feature> [<repo>]
 
 kv_get() { [ -f "$1" ] || return 0; sed -n "s/^$2=//p" "$1" | head -n1; } # kv_get <file> <key>: nothing if absent
 
+kv_set() { # kv_set <file> <key> <value>: replace (or add) one key=value line
+  local f=$1 tmp="$1.tmp.$$"
+  { [ ! -f "$f" ] || grep -v "^$2=" "$f" || true; echo "$2=$3"; } > "$tmp" && mv -f "$tmp" "$f"
+}
+
+# --- GitHub (finish-feature.sh, land-task.sh, finish-task.sh) ----------------
+gh_repo() { # gh_repo <url>: HOST/OWNER/REPO for a GitHub remote URL, or return 1
+  local u=$1 host path
+  case $u in
+    https://*|http://*|ssh://*|git://*) u=${u#*://}; u=${u#*@}; host=${u%%/*}; path=${u#*/} ;;
+    *@*:*) u=${u#*@}; host=${u%%:*}; path=${u#*:} ;;
+    *) return 1 ;;
+  esac
+  host=${host%%:*}; path=${path%.git}; path=${path%/}
+  [ "$host" = github.com ] || [ "$host" = "${GH_HOST:-github.com}" ] || return 1 # GH_HOST: GitHub Enterprise
+  [[ $path =~ ^[^/]+/[^/]+$ ]] || return 1
+  echo "$host/$path"
+}
+
+origin_github() { # origin_github <root>: HOST/OWNER/REPO of its origin (raw remote.origin.url), or return 1
+  local url; url=$(git -C "$1" config --get remote.origin.url 2>/dev/null) || return 1
+  gh_repo "$url"
+}
+
+# gh_check <root> <name>: sets GH_REPO (HOST/OWNER/REPO, or empty) and
+# GH_PROBLEMS (one reason per entry) for pushing to that repo's origin and
+# using gh there: an origin, on GitHub, gh installed and logged in to its host.
+GH_REPO='' GH_PROBLEMS=()
+gh_check() {
+  local url
+  GH_REPO='' GH_PROBLEMS=()
+  url=$(git -C "$1" config --get remote.origin.url 2>/dev/null || true)
+  if [ -z "$url" ]; then
+    GH_PROBLEMS+=("$2 has no 'origin' remote")
+  elif ! GH_REPO=$(gh_repo "$url"); then
+    GH_REPO=''; GH_PROBLEMS+=("origin ($url) is not a GitHub repository")
+  fi
+  if ! command -v gh >/dev/null 2>&1; then
+    GH_PROBLEMS+=("gh (the GitHub CLI) is not installed: https://cli.github.com")
+  elif [ -n "$GH_REPO" ] && ! gh auth status --hostname "${GH_REPO%%/*}" >/dev/null 2>&1; then
+    GH_PROBLEMS+=("gh is not logged in to ${GH_REPO%%/*} (gh auth login)")
+  fi
+  return 0
+}
+
+default_target() { # default_target <root>: origin/HEAD's branch, else main
+  local t; t=$(git -C "$1" symbolic-ref --short -q refs/remotes/origin/HEAD 2>/dev/null || true)
+  t=${t#origin/}; echo "${t:-main}"
+}
+
+# shellcheck disable=SC2034 # used by the scripts that source lib.sh
+ATTRIBUTION='🤖 Generated with [Claude Code](https://claude.com/claude-code)'
+
+# --- how a task lands: a local merge, or a PR into its base -------------------
+# tasks/<slug>.land holds "merge" or "pr", decided by new-task.sh: --land, else
+# state's land= (start.sh --land; "auto" or none = by base), else by base:
+# the repo's default branch (default_target) with a GitHub origin -> pr, any
+# other base -> merge. Tasks from before this have no .land: merge.
+land_by_base() { # land_by_base <root> <base>: pr or merge
+  if [ "$2" = "$(default_target "$1")" ] && origin_github "$1" >/dev/null; then echo pr; else echo merge; fi
+}
+
+task_land() { # task_land <slug>: merge or pr
+  local l; l=$(head -n1 "$(state_dir)/tasks/$1.land" 2>/dev/null || true)
+  [ "$l" = pr ] && echo pr || echo merge
+}
+
+# tasks/<slug>.pr (land-task.sh) holds key=value lines: url=, number=, base=,
+# repo= (gh's HOST/OWNER/REPO), created=, state= (last seen: OPEN, MERGED,
+# CLOSED), checks= (pr-watch.sh: PASS or FAIL), merge_commit= once merged,
+# and ws_repo=<repo> in workspace mode.
+task_pr_file() { echo "$(state_dir)/tasks/$1.pr"; } # task_pr_file <slug>
+
+report_summary() { # report_summary <file>: its Summary: line, else its first text line, else "(no report)"
+  local f=$1 s=
+  if [ -f "$f" ]; then
+    s=$(sed -n 's/^[[:space:]]*\**Summary:\**[[:space:]]*//p' "$f" | head -n1)
+    [ -n "$s" ] || s=$(grep -v -e '^[[:space:]]*$' -e '^[[:space:]]*#' "$f" | head -n1)
+  fi
+  s=$(printf '%s' "$s" | tr '\r\n|' '   ' | tr -s ' ' | sed 's/ *$//' | cut -c1-160)
+  echo "${s:-(no report)}"
+}
+
 check_slug() {
   [[ "${1:-}" =~ ^[a-z0-9][a-z0-9._-]*$ ]] || die "slug must be lowercase letters, digits, . _ - (got '${1:-}')"
 }

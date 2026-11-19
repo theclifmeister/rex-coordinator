@@ -10,6 +10,9 @@ You are a worker, not the coordinator. Ignore any coordinator-flow instructions:
 <!-- board -->
 - Board task: `{{TSK_NUM}}` (UUID `{{TSK_ID}}`; see "Board task" below)
 <!-- /board -->
+<!-- pr -->
+- Lands as: **a pull request into `{{FEATURE}}`** on GitHub (see "Landing as a PR" below)
+<!-- /pr -->
 
 ## Goal
 
@@ -35,6 +38,16 @@ You are a worker, not the coordinator. Ignore any coordinator-flow instructions:
 - Don't touch the workspace's other repos: this task is only in `{{REPO}}`. Read them if the task needs it; if a change there is needed, say so in the report.
 <!-- /workspace -->
 - Ask (REPORT BLOCKED, below) before anything that spends significant time or money.
+<!-- pr -->
+
+## Landing as a PR
+
+Your branch `{{SLUG}}` becomes a pull request into `{{FEATURE}}`: the coordinator pushes it and opens the PR (on the user's say-so) after your report. Commit messages and the report are what reviewers read, so write them for that: one commit per logical change, each message saying what and why.
+
+- Your report's Summary, `## Done`, `## Checks` and `## Open questions` become the PR description.
+- After `REPORT DONE`, stay in this tab: the PR's CI runs next. If it fails, the coordinator sends you the failure (with `ACK`, as for any message); fix it with new commits on `{{SLUG}}`, update the report, and send `REPORT DONE {{SLUG}}` again. The coordinator closes this tab once CI passes.
+- Only when the coordinator tells you to (a conflict with `{{FEATURE}}`): `git fetch origin {{FEATURE}} && git merge origin/{{FEATURE}}` into your own branch, and resolve the conflicts there. That is the only merge you may make. Still never push, never rebase, never touch other branches.
+<!-- /pr -->
 
 ## Checks
 
