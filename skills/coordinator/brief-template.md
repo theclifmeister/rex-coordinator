@@ -11,7 +11,7 @@ You are a worker, not the coordinator. Ignore any coordinator-flow instructions:
 - Board task: `{{TSK_NUM}}` (UUID `{{TSK_ID}}`; see "Board task" below)
 <!-- /board -->
 <!-- pr -->
-- Lands as: **a pull request into `{{FEATURE}}`** on GitHub (see "Landing as a PR" below)
+- Lands as: **a pull request into `{{FEATURE}}`** on its forge (GitHub or Azure DevOps; see "Landing as a PR" below)
 <!-- /pr -->
 
 ## Goal
