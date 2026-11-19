@@ -26,6 +26,12 @@ Scripts live in `${CLAUDE_PLUGIN_ROOT}/scripts` (the SessionStart context gives 
 - On a detached HEAD or mid-rebase the scripts fall back to the last seen feature branch and warn.
 - Merge everything that's done before cutting a new task, so workers start from the latest state.
 
+## Workspace mode (partly built)
+
+`/coordinator-start` in a folder that is not a git repo but holds git repos as direct children (a `.git` dir or file; plain folders and files are skipped) makes this pane the coordinator for the whole **workspace**. State is keyed by the workspace folder and holds `mode=workspace`, `root=<folder>` and `feature.<repo>=` per repo: each repo's feature branch is its own main checkout's branch (`<ws>/<repo>`), and a switch is reported once per repo ("<repo>: feature branch changed from X to Y"). The scripts find the workspace state from the workspace folder, any repo in it, or their worktrees. Always use `git -C <ws>/<repo>`.
+
+Built so far: `/coordinator-start`, `status.sh` (a "Repos:" block; the board is the workspace folder's tsk project plus its repos' own projects), `stop.sh`, `tell.sh`, `board.sh`, the watchers and `recall.sh` (ledger and files). **Not yet:** the task commands (`new-task.sh`, `launch-worker.sh`, `finish-task.sh`, `research.sh`, `finish-feature.sh`) refuse in workspace mode until the per-repo task lifecycle lands. Tell the user before planning tasks; a single repo can still get its own coordinator (stop the workspace one first: only one live coordinator may cover a repo, and `/coordinator-start` refuses otherwise).
+
 ## Handing out a task
 
 1. **Recall first:** `recall.sh <word> [word...]` with a few key words for the task (see Memory).
