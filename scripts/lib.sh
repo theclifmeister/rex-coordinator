@@ -189,8 +189,57 @@ rex_restore_tab() { # rex_restore_tab <session> <window> <label>: undo our renam
   rex window rename -s "$1" "$2" "$3" >/dev/null 2>&1 || rex_warn "could not rename tab $2 back to '$3'"
 }
 
-rex_close_board() { # rex_close_board <session> <block>: close the tsk pane we opened, if it still exists
+# The tsk board is one terminal block, labelled "tsk", in a floating layer of
+# its own (minimized when opened), recorded as state's tsk_block= and
+# tsk_layer=. Older versions put it in a split beside the coordinator (no
+# tsk_layer=); a Rex without floating layers still gets that split.
+rex_has_layers() { # rex_has_layers: this Rex has floating layers (session.new_layer)
+  rex api describe session.new_layer --json >/dev/null 2>&1
+}
+
+rex_block_layer() { # rex_block_layer <session> <block>: "<layer> <kind> <blocks in it>", empty if not found
+  [ -n "$1" ] && [ -n "$2" ] || return 0
+  rex api call -s "$1" session.view '{}' 2>/dev/null \
+    | jq -r --arg b "$2" 'first(.windows[]?.layers[]? | select(any(.blocks[]?; .block_id == $b))
+        | "\(.layer_id) \(.kind) \(.blocks | length)") // empty' 2>/dev/null || true
+}
+
+# rex_open_board <session> <window> <anchor block> <cwd> <tsk path>: open the
+# board and print "<block> <layer>" (layer empty for the split fallback), or
+# nothing when it could not be opened. Never takes focus.
+rex_open_board() {
+  local r b l
+  if ! rex_has_layers; then
+    echo "Note: this Rex has no floating panes, so the tsk board opens in a split beside this pane." >&2
+    b=$(rex split -s "$1" -b "$3" --split=right --ratio 40 --focus=false \
+          --label tsk -c "$4" --json -- "$5" 2>/dev/null \
+        | jq -r '.block_ids[0] // empty' 2>/dev/null) || b=""
+    [ -z "$b" ] || echo "$b"
+    return 0
+  fi
+  r=$(rex api call -s "$1" session.new_layer "$(jq -nc --arg w "$2" --arg cwd "$4" --arg tsk "$5" \
+        '{window_id: $w, bounds: [0.1, 0.1, 0.8, 0.8], focus: false,
+          layout: {block: {flavor: "com.superlogical.terminal.shell", label: "tsk",
+                           options: {command: [$tsk], cwd: $cwd}}}}')" 2>/dev/null) || r=""
+  b=$(jq -r '.block_ids[0] // empty' <<<"$r" 2>/dev/null) || b=""
+  l=$(jq -r '.layer_id // empty' <<<"$r" 2>/dev/null) || l=""
+  [ -n "$b" ] && [ -n "$l" ] || return 0
+  rex api call -s "$1" session.set_layer_state "$(jq -nc --arg l "$l" '{layer_id: $l, state: "minimized"}')" \
+    >/dev/null 2>&1 || rex_warn "could not minimize the tsk board's floating pane: it stays open"
+  echo "$b $l"
+}
+
+# rex_close_board <session> <block> [layer]: close the tsk board we opened, if
+# it still exists. Its floating layer goes too while that layer holds only our
+# block; anything else is closed by the block ID alone.
+rex_close_board() {
+  local where
   [ -n "$(rex_block_window "$1" "$2")" ] || return 0
+  where=$(rex_block_layer "$1" "$2")
+  if [ -n "${3:-}" ] && [ "$where" = "$3 floating 1" ]; then
+    rex api call -s "$1" session.close_layer "$(jq -nc --arg l "$3" '{layer_id: $l}')" >/dev/null 2>&1 \
+      && return 0
+  fi
   rex block close -s "$1" "$2" >/dev/null 2>&1 || rex_warn "could not close the tsk pane $2"
 }
 
