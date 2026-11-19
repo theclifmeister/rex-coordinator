@@ -8,7 +8,7 @@
 # Either way it refuses while another live coordinator covers the same repo.
 # --land pr|merge|auto: how new tasks land by default (state's land=; auto,
 # the default: a PR when the task's base is the repo's default branch and
-# origin is GitHub, else a local merge). new-task.sh --land overrides it.
+# origin is on GitHub or Azure DevOps, else a local merge). new-task.sh --land overrides it.
 source "$(dirname "$0")/lib.sh"
 land=auto args=()
 while [ $# -gt 0 ]; do
@@ -189,7 +189,7 @@ else
 fi
 echo "State: $dir"
 case $land in
-  auto) echo "Landing: by base (a PR when a task's base is the repo's default branch and origin is GitHub, else a local merge)" ;;
+  auto) echo "Landing: by base (a PR when a task's base is the repo's default branch and origin is on GitHub or Azure DevOps, else a local merge)" ;;
   *) echo "Landing: $land for every new task (new-task.sh --land overrides)" ;;
 esac
 [ -z "${tb:-}" ] || echo "tsk board pane: $tb${tl:+ (floating, layer $tl)}"

@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
 # land-task.sh <slug> [--yes] — land a pr-mode task (tasks/<slug>.land = pr)
-# as a GitHub pull request into its base, instead of a local merge.
+# as a pull request into its base on its forge (GitHub or Azure DevOps, from
+# origin's URL; see the forge layer in lib.sh), instead of a local merge.
 #
 # Without --yes: check everything and print the plan (the push, the PR it
 # would create or reuse, its title and body), then exit 2. Nothing is pushed.
 # Every push needs the user's say-so: the coordinator asks, every time, and
 # only then reruns with --yes.
 # --yes: git push -u origin <slug>, then reuse the open PR for head <slug> or
-#   create one (gh pr create --base <base> --head <slug>). Title: the board
+#   create one (forge_pr_create; gh pr create / az repos pr create). Title: the board
 #   task's title, else the report's Summary. Body: the report's Summary,
 #   ## Done, ## Checks and ## Open questions, the board T<n>, and the Claude
-#   Code attribution line. Records tasks/<slug>.pr (url, number, base, repo,
-#   state). A rerun after new commits pushes again and reuses the PR.
+#   Code attribution line. Records tasks/<slug>.pr (url, number, base, forge,
+#   repo, state). A rerun after new commits pushes again and reuses the PR.
 #   Board, the first time: the linked task goes to review --on you, mirroring
 #   the report as finish-task.sh does for a merge (done "PR <url> into <base>:
 #   <Summary>"), plus a "PR: <url>" notes line (once); the link moves to
@@ -19,7 +20,8 @@
 #   fixes what CI finds, until finish-task.sh closes the task after the merge.
 # Refuses (listing every reason) unless the task is a pr task, its worktree
 # is clean, its branch has commits its base (and origin/<base>) doesn't, and
-# origin is GitHub with gh installed and logged in. Exit: 0 done, 1 refused,
+# origin is on GitHub or Azure DevOps with its CLI installed and logged in
+# (forge_check). Exit: 0 done, 1 refused,
 # 2 plan only.
 # Workspace mode: all of it in the task's repo (tasks/<slug>.repo).
 source "$(dirname "$0")/lib.sh"
@@ -55,10 +57,9 @@ else
   [ -z "$busy" ] || problem "the worktree $wt has $busy in progress"
   ! checkout_dirty "$wt" || problem "the worktree $wt has uncommitted changes: the worker commits them first"
 fi
-gh_check "$root" "${wsrepo:-this repo}"
-for p in ${GH_PROBLEMS[@]+"${GH_PROBLEMS[@]}"}; do problem "$p"; done
-repo=$GH_REPO
-ghr() { gh "$@" -R "$repo"; }
+forge_check "$root" "${wsrepo:-this repo}"
+for p in ${FORGE_PROBLEMS[@]+"${FORGE_PROBLEMS[@]}"}; do problem "$p"; done
+repo=$FORGE_REPO forge=$FORGE
 
 ahead=0 ahead_origin=''
 if [ -n "$base" ] && git -C "$root" rev-parse --verify -q "refs/heads/$slug" >/dev/null; then
@@ -70,7 +71,7 @@ if [ -n "$base" ] && git -C "$root" rev-parse --verify -q "refs/heads/$slug" >/d
       ahead_origin=$(git -C "$root" rev-list --count "origin/$base..$slug")
       [ "$ahead_origin" -gt 0 ] || problem "$slug has nothing that origin/$base doesn't have"
     else
-      problem "could not fetch $base from origin (git fetch origin $base): it must be on GitHub to take a PR"
+      problem "could not fetch $base from origin (git fetch origin $base): it must be on $(forge_name) to take a PR"
     fi
   fi
 fi
@@ -83,12 +84,11 @@ report_refusal() {
 [ ${#problems[@]} = 0 ] || report_refusal "${problems[@]}"
 
 # --- the PR: an open one for this head, else a recorded one that is closed ------
-open=$(ghr pr list --head "$slug" --state open --json url,number 2>/dev/null) \
-  || die "gh pr list failed for $repo (head $slug)"
-pr_url=$(jq -r '.[0].url // empty' <<<"$open" 2>/dev/null || true)
-pr_num=$(jq -r '.[0].number // empty' <<<"$open" 2>/dev/null || true)
+open=$(forge_pr_find "$slug" "$base") \
+  || die "could not list the PRs of $repo on $(forge_name) (head $slug)"
+read -r pr_url pr_num <<<"$open" || true
 if [ -z "$pr_url" ] && [ -n "$(kv_get "$prf" url)" ]; then
-  st=$(ghr pr view "$(kv_get "$prf" url)" --json state -q .state 2>/dev/null || true)
+  st=$(forge_pr_state "$(kv_get "$prf" url)" || true); st=${st%% *}
   case $st in
     MERGED) die "$(kv_get "$prf" url) is already merged: run finish-task.sh $slug" ;;
     CLOSED) echo "Note: the recorded PR $(kv_get "$prf" url) was closed without merging; a new one would be opened." >&2 ;;
@@ -122,12 +122,12 @@ body=$(
 
 [ -z "$wsrepo" ] || echo "Repo:     $wsrepo ($root)"
 echo "Task:     $label, branch $slug ($ahead commit$([ "$ahead" = 1 ] || echo s) ahead of $base, ${ahead_origin:-?} of origin/$base)"
-echo "Base:     $base on $repo"
+echo "Base:     $base on $repo$([ "$forge" = github ] || echo " ($(forge_name))")"
 if [ -n "$pr_url" ]; then echo "PR:       reuse #$pr_num $pr_url"
 else echo "PR:       new, title: $title"; fi
 if [ $yes = 0 ]; then
   echo
-  echo "Not pushed. Would run: git push -u origin $slug, then $([ -n "$pr_url" ] && echo "reuse #$pr_num" || echo "gh pr create --base $base --head $slug")."
+  echo "Not pushed. Would run: git push -u origin $slug, then $(if [ -n "$pr_url" ]; then echo "reuse #$pr_num"; else forge_pr_create_hint "$base" "$slug"; fi)."
   echo "Ask the user (every push needs their say-so), then rerun with --yes."
   if [ -z "$pr_url" ]; then echo; echo "PR body:"; printf '%s\n' "$body" | sed 's/^/  | /'; fi
   exit 2
@@ -138,18 +138,15 @@ new=0
 if [ -z "$pr_url" ]; then
   tmp=$(mktemp "${TMPDIR:-/tmp}/rexc-pr.XXXXXX"); trap 'rm -f "$tmp"' EXIT
   printf '%s\n' "$body" > "$tmp"
-  out=$(ghr pr create --base "$base" --head "$slug" --title "$title" --body-file "$tmp") \
-    || die "gh pr create failed: $out"
-  pr_url=$(grep -Eo 'https?://[^ ]+/pull/[0-9]+' <<<"$out" | tail -n1)
-  [ -n "$pr_url" ] || die "gh pr create printed no PR URL: $out"
-  pr_num=${pr_url##*/}; new=1
+  pr_url=$(forge_pr_create "$base" "$slug" "$title" "$tmp") || die "no PR was created"
+  pr_num=$(forge_pr_id "$pr_url"); new=1
 fi
 created=$(kv_get "$prf" created)
 [ "$(kv_get "$prf" url)" = "$pr_url" ] || created=
 mkdir -p "$(dirname "$prf")"
 {
-  printf 'url=%s\nnumber=%s\nbase=%s\nrepo=%s\ncreated=%s\nstate=OPEN\n' \
-    "$pr_url" "$pr_num" "$base" "$repo" "${created:-$(date +%F)}"
+  printf 'url=%s\nnumber=%s\nbase=%s\nforge=%s\nrepo=%s\ncreated=%s\nstate=OPEN\n' \
+    "$pr_url" "$pr_num" "$base" "$forge" "$repo" "${created:-$(date +%F)}"
   [ -z "$wsrepo" ] || echo "ws_repo=$wsrepo"
 } > "$prf.tmp.$$" && mv -f "$prf.tmp.$$" "$prf"
 if [ $new = 1 ]; then echo "Created PR #$pr_num: $pr_url"

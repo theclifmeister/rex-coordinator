@@ -11,8 +11,8 @@
 # each task's repo, worktrees of the repos that have tasks, and the board of
 # the workspace folder and its repos (tsk list --all --json, filtered by path).
 # A pr-mode task (tasks/<slug>.land) shows land=pr and its PR with the last
-# known state and checks (tasks/<slug>.pr; never asks GitHub), or "pr=not yet";
-# with a PR its report is no longer "ready" (it is in review on GitHub). A
+# known state and checks (tasks/<slug>.pr; never asks the forge), or "pr=not yet";
+# with a PR its report is no longer "ready" (it is in review on the forge). A
 # task without a tab (not launched yet, or finish-task.sh --close-tab) shows tab=none.
 source "$(dirname "$0")/lib.sh"
 dir=$(state_dir); _STATE_DIR=$dir

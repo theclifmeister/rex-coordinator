@@ -25,7 +25,8 @@
 # tasks/research-<topic>.repo), the ledger's slug column is "<repo>/<slug>"
 # (one word, so the sha stays field 5) and the board says "into <repo>/<base>".
 # A pr-mode task with a PR (tasks/<slug>.pr, from land-task.sh) counts as
-# merged when its branch is in <base> or origin/<base>, or gh says the PR is
+# merged when its branch is in <base> or origin/<base>, or its forge (GitHub:
+# gh; Azure DevOps: az, completed) says the PR is
 # MERGED (squash and rebase merges too). Then: git fetch origin <base> and,
 # when that repo's main checkout is on <base> and clean, git merge --ff-only
 # origin/<base> (else it prints how); the branch goes with -D; a remote branch
@@ -33,7 +34,8 @@
 # The ledger's sha is the PR's merge commit and the line ends "| pr: <url>".
 # The board task stays in review (land-task.sh put it there): only a
 # "Merged ..." notes line, and any --check goes on through board.sh check.
-# --abandon on it: a note, done, and "gh pr close <url>" printed (not run).
+# --abandon on it: a note, done, and the close command printed, not run (gh pr
+# close <url>; az repos pr update --id <n> --status abandoned).
 # --close-tab: only close the worker's tab (a pr task whose PR checks passed);
 # the worktree and branch stay until the PR is merged.
 source "$(dirname "$0")/lib.sh"
@@ -95,6 +97,7 @@ prf='' pr_url='' pr_mc=''
 if [ $research = 0 ] && [ "$(task_land "$slug")" = pr ] && [ -f "$(task_pr_file "$slug")" ]; then
   prf=$(task_pr_file "$slug"); pr_url=$(kv_get "$prf" url)
   pr_mc=$(kv_get "$prf" merge_commit)
+  forge_pr_use "$pr_url" "$prf"
 fi
 
 if [ "$abandon" != --abandon ] && [ $research = 0 ]; then
@@ -104,13 +107,15 @@ if [ "$abandon" != --abandon ] && [ $research = 0 ]; then
       || echo "rex-coordinator: warning: git fetch origin $base failed" >&2
     if ! git -C "$root" merge-base --is-ancestor "$slug" "$base" 2>/dev/null \
        && ! git -C "$root" merge-base --is-ancestor "$slug" "origin/$base" 2>/dev/null; then
-      command -v gh >/dev/null 2>&1 || die "$slug is not in $base or origin/$base, and gh is missing to ask GitHub about $pr_url"
-      v=$(gh pr view "$pr_url" --json state,mergeCommit 2>/dev/null) || die "could not read $pr_url with gh"
-      st=$(jq -r '.state // empty' <<<"$v")
-      [ "$st" = MERGED ] || die "$pr_url is ${st:-not readable}, not merged (the user merges it on GitHub; or pass --abandon)"
-      pr_mc=$(jq -r '.mergeCommit.oid // empty' <<<"$v"); [ -n "$pr_mc" ] || pr_mc=$(kv_get "$prf" merge_commit)
+      forge_has_cli || die "$slug is not in $base or origin/$base, and $(forge_cli) is missing to ask $(forge_name) about $pr_url"
+      v=$(forge_pr_state "$pr_url") || die "could not read $pr_url with $(forge_cli)"
+      read -r st mc <<<"$v" || true
+      [ "$st" = MERGED ] || die "$pr_url is ${st:-not readable}, not merged (the user merges it on $(forge_name); or pass --abandon)"
+      pr_mc=${mc:-$(kv_get "$prf" merge_commit)}
     fi
-    [ -n "$pr_mc" ] || pr_mc=$(gh pr view "$pr_url" --json mergeCommit -q '.mergeCommit.oid // empty' 2>/dev/null || true)
+    if [ -z "$pr_mc" ] && forge_has_cli && v=$(forge_pr_state "$pr_url"); then
+      read -r _ pr_mc <<<"$v" || true
+    fi
   else
     git -C "$root" merge-base --is-ancestor "$slug" "$base" \
       || die "$slug is not merged into $base, its base (merge it with $where on $base, or pass --abandon)"
@@ -188,7 +193,7 @@ if git -C "$root" rev-parse --verify -q "refs/heads/$slug" >/dev/null; then
 fi
 if [ -n "$pr_url" ]; then
   if [ "$abandon" = --abandon ]; then
-    echo "Not done (ask the user): gh pr close $pr_url"
+    echo "Not done (ask the user): $(forge_pr_close_hint "$pr_url")"
   else
     # Bring the main checkout up to the merged base, when that is safe.
     if [ "$(checkout_branch "$root")" = "$base" ] && [ -z "$(checkout_busy "$root")" ] && ! checkout_dirty "$root"; then
