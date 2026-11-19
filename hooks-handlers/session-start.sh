@@ -5,7 +5,14 @@ cat >/dev/null
 [ "${CLAUDE_ROLE:-}" = worker ] && exit 0
 [ -n "${REX_BLOCK:-}" ] || exit 0
 common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || exit 0
-state="$common/rex-coordinator/state"
+root="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
+# shellcheck source=../scripts/state-path.sh
+source "$root/scripts/state-path.sh" 2>/dev/null || exit 0
+# Read-only: state still in the old place is read there (the first script
+# run, status.sh, moves it).
+sd=$(state_path_for "$common")
+[ -f "$sd/state" ] || sd=$(state_legacy_dir "$common")
+state="$sd/state"
 [ -f "$state" ] || exit 0
 block=$(sed -n 's/^block=//p' "$state" | head -n1)
 [ "$block" = "$REX_BLOCK" ] || exit 0
@@ -13,7 +20,6 @@ block=$(sed -n 's/^block=//p' "$state" | head -n1)
 missing=""
 for c in rex jq; do command -v "$c" >/dev/null 2>&1 || missing="$missing $c"; done
 last=$(sed -n 's/^feature=//p' "$state" | head -n1)
-root="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 # tsk >= 0.14.1 is required too (one `tsk --version` call, no jq). An
 # unparsable version is left to doctor.sh, which only warns about it.
 tskfix=
@@ -40,12 +46,12 @@ change=
 if [ -n "$cur" ] && [ -n "$last" ] && [ "$cur" != "$last" ]; then
   # Open tasks still based on the old branch (no .base file = based on feature=).
   on=
-  for f in "$common"/rex-coordinator/tasks/*.block "$common"/rex-coordinator/tasks/*.tsk "$common"/rex-coordinator/tasks/*.base; do
+  for f in "$sd"/tasks/*.block "$sd"/tasks/*.tsk "$sd"/tasks/*.base; do
     [ -f "$f" ] || continue
     s=$(basename "$f"); s=${s%.*}
     case $s in research-*) continue ;; esac
     case " $on " in *" $s "*) continue ;; esac
-    b="$common/rex-coordinator/tasks/$s.base"
+    b="$sd/tasks/$s.base"
     if [ -s "$b" ]; then [ "$(head -n1 "$b")" = "$last" ] || continue; fi
     on="${on:+$on }$s"
   done
@@ -58,12 +64,12 @@ fi
 ctx="This Rex pane ($REX_BLOCK) is the COORDINATOR for this repo; $fb.$change
 
 Before replying to anything, load the rex-coordinator:coordinator skill and follow it: you only coordinate, and every task goes to a fresh worker Claude in its own Rex tab and worktree. Plugin scripts are in $root/scripts. Start by running $root/scripts/status.sh to pick up tasks from earlier sessions."
-history="$common/rex-coordinator/history.md"
+history="$sd/history.md"
 if [ -s "$history" ]; then
   recent=$(grep '^- ' "$history" | tail -n 15)
   [ -z "$recent" ] || ctx="$ctx
 
-Recent coordinator history (oldest first; relative paths are under $common/rex-coordinator/):
+Recent coordinator history (oldest first; relative paths are under $sd/):
 $recent
 
 Older entries, briefs, reports and research answers: $root/scripts/recall.sh <word> [word...]."

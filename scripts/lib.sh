@@ -4,13 +4,25 @@ set -euo pipefail
 
 die() { echo "rex-coordinator: $*" >&2; exit 1; }
 
-# Per-repo state lives inside the git common dir, so it is shared by every
-# worktree, never committed, and needs no .gitignore entry.
+# shellcheck source=state-path.sh
+source "$(dirname "${BASH_SOURCE[0]}")/state-path.sh"
+
+# Per-repo state lives in ~/.rex-coordinator/<name>-<hash> (state-path.sh),
+# keyed by the main checkout, so every worktree shares it and it is never in
+# the repo. State still in the old <git-common-dir>/rex-coordinator is moved
+# there on first use; a symlink stays at the old path, so workers briefed
+# with old paths and absolute paths in older history lines keep working.
 state_dir() {
-  local common
+  local common dir old
   common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) \
     || die "not inside a git repository"
-  echo "$common/rex-coordinator"
+  dir=$(state_path_for "$common")
+  old=$(state_legacy_dir "$common")
+  if [ -d "$old" ] && [ ! -L "$old" ] && [ ! -e "$dir" ]; then
+    mkdir -p "$(dirname "$dir")" && mv "$old" "$dir" && ln -s "$dir" "$old" \
+      && echo "rex-coordinator: moved this repo's state from $old to $dir" >&2
+  fi
+  echo "$dir"
 }
 
 state_get() { # state_get <key>

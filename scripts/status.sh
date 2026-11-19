@@ -21,6 +21,7 @@ fi
 [ -z "$FEATURE_NOTE" ] || echo "  (!) $FEATURE_NOTE"
 echo "Coordinator block: $(state_get block)"
 [ "$(state_get block)" = "${REX_BLOCK:-}" ] && echo "  (this pane)" || echo "  (NOT this pane: ${REX_BLOCK:-none})"
+echo "State:             $dir"
 echo
 echo "Open tasks:"
 found=0
