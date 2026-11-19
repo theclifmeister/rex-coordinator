@@ -45,6 +45,12 @@ for f in "$dir"/tasks/*.block; do
   esac
 done
 [ $found = 1 ] || echo "  none"
+prs=
+for f in "$dir"/features/*.pr; do
+  [ -f "$f" ] && [ -z "$(kv_get "$f" merged)" ] || continue
+  prs+="  $(kv_get "$f" feature) -> $(kv_get "$f" target)  #$(kv_get "$f" number) $(kv_get "$f" url)  (since $(kv_get "$f" created))"$'\n'
+done
+if [ -n "$prs" ]; then echo; echo "Feature PRs (open; finish-feature.sh --merge merges, on the user's say-so):"; printf '%s' "$prs"; fi
 echo
 echo "Worktrees:"; git -C "$root" worktree list | sed 's/^/  /'
 echo

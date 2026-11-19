@@ -17,11 +17,9 @@ feature=${1:-$cur}
 [ -n "$feature" ] || die "main checkout is on a detached HEAD; check out the feature branch, or pass it"
 git -C "$root" rev-parse --verify -q "refs/heads/$feature" >/dev/null || die "no local branch '$feature'"
 if [ "$feature" != "$cur" ]; then
-  gd=$(git -C "$root" rev-parse --path-format=absolute --git-dir)
-  for f in MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD rebase-merge rebase-apply; do
-    [ ! -e "$gd/$f" ] || die "the main checkout ($root) has a merge, rebase or cherry-pick in progress: finish it before switching to '$feature'"
-  done
-  [ -z "$(git -C "$root" status --porcelain --untracked-files=no)" ] \
+  [ -z "$(checkout_busy "$root")" ] \
+    || die "the main checkout ($root) has a merge, rebase or cherry-pick in progress: finish it before switching to '$feature'"
+  ! checkout_dirty "$root" \
     || die "the main checkout ($root) has uncommitted changes: commit or stash them before switching to '$feature' (or run /coordinator-start without a branch to stay on ${cur:-the current HEAD})"
   git -C "$root" checkout -q "$feature" || die "could not check out '$feature' in $root"
   echo "Checked out $feature in the main checkout (was ${cur:-detached})."

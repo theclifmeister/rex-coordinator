@@ -133,6 +133,27 @@ feature_branch() { # the current feature branch on stdout; warning and change no
   echo "$FEATURE"
 }
 
+# --- the main checkout's state (start.sh, finish-feature.sh) ----------------
+checkout_busy() { # checkout_busy <root>: what is in progress (merge, rebase, ...), or nothing
+  local gd f
+  gd=$(git -C "$1" rev-parse --path-format=absolute --git-dir 2>/dev/null) || return 0
+  for f in MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD rebase-merge rebase-apply; do
+    [ ! -e "$gd/$f" ] || { echo "a merge, rebase or cherry-pick ($f)"; return 0; }
+  done
+}
+
+checkout_dirty() { # checkout_dirty <root>: true if tracked files have uncommitted changes
+  [ -n "$(git -C "$1" status --porcelain --untracked-files=no 2>/dev/null)" ]
+}
+
+# --- feature pull requests (finish-feature.sh, pr-watch.sh, status.sh) -------
+# features/<feature, / as -->.pr holds key=value lines: feature=, target=,
+# url=, number=, repo= (gh's HOST/OWNER/REPO), created=, and merged= once
+# finish-feature.sh --merge merged it.
+feature_pr_file() { echo "$(state_dir)/features/${1//\//--}.pr"; } # feature_pr_file <feature>
+
+kv_get() { [ -f "$1" ] || return 0; sed -n "s/^$2=//p" "$1" | head -n1; } # kv_get <file> <key>: nothing if absent
+
 check_slug() {
   [[ "${1:-}" =~ ^[a-z0-9][a-z0-9._-]*$ ]] || die "slug must be lowercase letters, digits, . _ - (got '${1:-}')"
 }
