@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tell.sh <slug> <file | -> — send a worker (task or research tab) a message of
 # any length. Long `rex send` input arrives truncated in Claude's prompt, so the
-# message goes to messages/<slug>-<n>.md and only one short line is typed in,
+# message goes to messages/YYMMDD-<slug>-<n>.md (today's date) and only one short line is typed in,
 # asking the worker to read it and ACK back to the coordinator.
 source "$(dirname "$0")/lib.sh"
 require_coordinator
@@ -14,8 +14,9 @@ block=$(cat "$bf")
 rex block inspect "$block" >/dev/null 2>&1 || die "worker tab for $slug is gone ($block)"
 
 mkdir -p "$dir/messages"
-n=1; while [ -e "$dir/messages/$slug-$n.md" ]; do n=$((n+1)); done
-msg="$dir/messages/$slug-$n.md"
+# <n> counts on across days and older undated messages, so ACK <slug>-<n> stays unique.
+n=1; while [ -e "$dir/messages/$slug-$n.md" ] || [ -n "$(dated_match "$dir/messages" "$slug-$n.md")" ]; do n=$((n+1)); done
+msg="$dir/messages/$(today_stamp)-$slug-$n.md"
 if [ "$src" = - ]; then cat > "$msg"; else cp "$src" "$msg"; fi
 [ -s "$msg" ] || { rm -f "$msg"; die "message is empty"; }
 

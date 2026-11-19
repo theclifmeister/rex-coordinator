@@ -3,6 +3,9 @@ You are a worker, not the coordinator. Ignore any coordinator-flow instructions:
 # Task: {{SLUG}}
 
 - Worktree: `{{WORKTREE}}` (branch `{{SLUG}}`, cut from `{{FEATURE}}`)
+<!-- workspace -->
+- Repo: `{{REPO}}`, in the workspace `{{WORKSPACE}}` (a folder of separate git repos)
+<!-- /workspace -->
 - Coordinator's Rex block: `{{COORDINATOR_BLOCK}}`
 <!-- board -->
 - Board task: `{{TSK_NUM}}` (UUID `{{TSK_ID}}`; see "Board task" below)
@@ -28,6 +31,9 @@ You are a worker, not the coordinator. Ignore any coordinator-flow instructions:
 
 - Work only in `{{WORKTREE}}`. Commit on branch `{{SLUG}}` only.
 - Never push, never merge, never rebase other branches, never touch other worktrees.
+<!-- workspace -->
+- Don't touch the workspace's other repos: this task is only in `{{REPO}}`. Read them if the task needs it; if a change there is needed, say so in the report.
+<!-- /workspace -->
 - Ask (REPORT BLOCKED, below) before anything that spends significant time or money.
 
 ## Checks
@@ -45,7 +51,16 @@ This task is `{{TSK_NUM}}` on the user's tsk board. The coordinator owns it: onl
   - `tsk steps {{TSK_ID}} toggle <short_id>` — complete a todo. Toggle flips the step, so read the task first and toggle only a step whose `.done` is `false`.
 - Never run `tsk status`, `edit`, `reply`, `archive`, `dispatch`, `clean` or `trash`, and never a bare `tsk add` or `tsk list`: this worktree counts as a different project on the board.
 - Never retry a failed `steps add` or `toggle` blindly: read the task first, it may have gone through.
-- Steps are the user's plan: add one only for real work left on this task, not for your own bookkeeping.
+
+**Plan with the task's steps** — the user watches them as your progress (`steps d/t` on the board):
+
+1. Before starting the work, read the task (`tsk list {{TSK_ID}} --json`, `.[0].steps`).
+2. No steps yet: add 3–7 steps that are your plan for this brief — verb-first, concrete, in order, one per real piece of work. No bookkeeping steps ("read the brief", "write the report", "send REPORT DONE").
+3. The user already wrote steps: they are the plan; follow them. Add a step only for real work they miss. Never edit, remove or reorder the user's steps.
+4. Tick each step as soon as that piece is done, not all at the end: read the task first and `toggle` only a step whose `.done` is `false`.
+5. In the report, `## Not done` lists every step left unticked, with why.
+
+Steps are the plan during the work; `## Checks` in the report is what to verify at review.
 
 As written on the board when this brief was made:
 

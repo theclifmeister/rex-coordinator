@@ -34,13 +34,19 @@ skills=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills
   || notes+=("the tsk-cli skill is not installed in $skills: run 'tsk setup' to add it (decline or rebind 'tsk setup rex', which takes alt+t)")
 # A local-scope enable (the repo's .claude/settings.local.json, shared by its
 # worktrees) makes Claude Code add an install record per worker worktree.
-if common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
-  root=${common%/*}
+# Outside a git repo (a workspace folder), each repo directly under it.
+local_enable_note() { # local_enable_note <main checkout>
+  local root=$1 id
   id=$(grep -Eo '"rex-coordinator@[^"]*"[[:space:]]*:[[:space:]]*true' "$root/.claude/settings.local.json" 2>/dev/null \
        | head -n1 | cut -d'"' -f2)
   if [ -n "$id" ]; then
     notes+=("$root/.claude/settings.local.json enables $id at local scope, so Claude Code adds an install record for every worker worktree. With the user-scope install enabled it is not needed: in $root run 'claude plugin uninstall $id --scope local --keep-data' (removes only that enable and the main checkout's local record), then $(cd "$(dirname "$0")" && pwd)/plugin-records.sh --fix for old worktree records")
   fi
+}
+if common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
+  local_enable_note "${common%/*}"
+else
+  for d in "$PWD"/*/; do d=${d%/}; [ -e "$d/.git" ] && local_enable_note "$d"; done
 fi
 
 if [ "$quiet" = 0 ]; then

@@ -19,6 +19,10 @@
 # "## Checks" gets the summary only. The link moves to review/<slug>.tsk for
 # board-watch.sh. --abandon -> a note (date, branch, last sha), then done, and
 # the link goes.
+# Merged and abandoned ledger lines end with "| base: <base>".
+# Workspace mode: the git work happens in the task's repo (tasks/<slug>.repo,
+# tasks/research-<topic>.repo), the ledger's slug column is "<repo>/<slug>"
+# (one word, so the sha stays field 5) and the board says "into <repo>/<base>".
 source "$(dirname "$0")/lib.sh"
 require_coordinator
 slug=${1:-}; check_slug "$slug"; shift
@@ -31,16 +35,30 @@ while [ $# -gt 0 ]; do
     *) die "usage: finish-task.sh <slug> [--abandon] [--check \"PASS|FAIL|SKIP <text>\"]..." ;;
   esac
 done
-dir=$(state_dir); root=$(repo_root)
+dir=$(state_dir); ws=
+# The task's repo: in workspace mode the one in tasks/<slug>.repo (none: no task).
+troot=
+if ws=$(ws_root); then
+  r=$(task_repo "$slug"); [ -z "$r" ] || troot="$ws/$r"
+else
+  troot=$(repo_root)
+fi
+root=$troot
 # The branch the task was cut from (tasks/<slug>.base; older tasks: state's feature=).
 base=$(task_base "$slug")
-wt="$root/.claude/worktrees/$slug"
+brief=$(state_file brief "$slug"); report=$(state_file report "$slug")
+answer=$(state_file research "$slug")
 
 # A research tab has no branch: nothing to merge, just close it.
 research=0
 { [ -f "$dir/tasks/research-$slug.block" ] || [ -f "$dir/tasks/research-$slug.ref" ]; } \
   && [ ! -f "$dir/tasks/$slug.block" ] \
-  && ! git -C "$root" rev-parse --verify -q "refs/heads/$slug" >/dev/null && research=1
+  && { [ -z "$troot" ] || ! git -C "$troot" rev-parse --verify -q "refs/heads/$slug" >/dev/null; } && research=1
+key=$slug; [ $research = 0 ] || key=research-$slug
+[ -n "$root" ] && [ $research = 0 ] || root=$(task_root "$key")
+wt="$root/.claude/worktrees/$slug"
+label=$(task_label "$key" "$slug")
+where="the main checkout"; [ -z "$ws" ] || where="$(task_repo "$key")'s main checkout ($root)"
 research_ref=-
 if [ $research = 1 ]; then
   wt="$root/.claude/worktrees/_research/$slug"
@@ -52,7 +70,7 @@ fi
 if [ "$abandon" != --abandon ] && [ $research = 0 ]; then
   [ -n "$base" ] || die "no base branch recorded for $slug"
   git -C "$root" merge-base --is-ancestor "$slug" "$base" \
-    || die "$slug is not merged into $base, its base (merge it with the main checkout on $base, or pass --abandon)"
+    || die "$slug is not merged into $base, its base (merge it with $where on $base, or pass --abandon)"
 fi
 
 # Ledger line, worked out before the branch goes. Never fails the script.
@@ -70,8 +88,8 @@ ledger_line() {
   tnum=${tsk_num:+ $tsk_num}
   if [ $research = 1 ]; then
     status=research; sha=$research_ref
-    refs="research: research/$slug.md"
-    echo "- $(date +%F) $slug $status $sha — $(summary_of "$dir/research/$slug.md") | $refs"
+    refs="research: ${answer#"$dir"/}"
+    echo "- $(date +%F) $label $status $sha — $(summary_of "$answer") | $refs"
     return
   fi
   if [ "$abandon" = --abandon ]; then
@@ -83,8 +101,8 @@ ledger_line() {
     [ -n "$sha" ] || sha=$(git -C "$root" rev-parse "$base" 2>/dev/null) || sha=-
     [ "$sha" = - ] || sha=$(git -C "$root" rev-parse --short "$sha" 2>/dev/null) || sha=-
   fi
-  refs="brief: briefs/$slug.md | report: reports/$slug-report.md"
-  echo "- $(date +%F) $slug $status ${sha:--}$tnum — $(summary_of "$dir/reports/$slug-report.md") | $refs"
+  refs="brief: ${brief#"$dir"/} | report: ${report#"$dir"/} | base: ${base:--}"
+  echo "- $(date +%F) $label $status ${sha:--}$tnum — $(summary_of "$report") | $refs"
 }
 tsk_id='' tsk_num=''
 if [ $research = 0 ] && [ -f "$dir/tasks/$slug.tsk" ]; then
@@ -92,7 +110,7 @@ if [ $research = 0 ] && [ -f "$dir/tasks/$slug.tsk" ]; then
 fi
 entry=$(ledger_line 2>/dev/null) || entry=
 # "- <date> <slug> <status> <sha> ..." -> the sha, for the board.
-sha=$(cut -d' ' -f5 <<<"$entry"); summary=$(summary_of "$dir/reports/$slug-report.md" 2>/dev/null) || summary=
+sha=$(cut -d' ' -f5 <<<"$entry"); summary=$(summary_of "$report" 2>/dev/null) || summary=
 
 # Only this slug's own tab: a task and a research topic may share a name.
 tabf="$dir/tasks/$slug.block"; [ $research = 1 ] && tabf="$dir/tasks/research-$slug.block"
@@ -101,7 +119,10 @@ if [ -f "$tabf" ]; then
   rm -f "$tabf"
 fi
 
-if [ $research = 1 ]; then rm -f "$dir/tasks/research-$slug.ref"; else rm -f "$dir/tasks/$slug.base"; fi
+# The .date goes too: state_file then finds the dated files by their prefix.
+# The .repo goes last (below): task_label and the board text still read it.
+if [ $research = 1 ]; then rm -f "$dir/tasks/research-$slug.ref" "$dir/tasks/research-$slug.date"
+else rm -f "$dir/tasks/$slug.base" "$dir/tasks/$slug.date"; fi
 # The local install record Claude Code made for the worker's worktree (see
 # plugin_drop_local_record in lib.sh), while the worktree is still there.
 # Best-effort and silent on failure; skipped without claude.
@@ -124,12 +145,11 @@ if [ -n "$tsk_id" ]; then
   if ! have_tsk; then
     tsk_warn "not installed: $tsk_num left as it is"
   elif [ "$abandon" = --abandon ]; then
-    note="Abandoned $(date +%F): branch $slug (last ${sha:--}) deleted, worktree removed."
+    note="Abandoned $(date +%F): branch $slug${ws:+ in $(task_repo "$slug")} (last ${sha:--}) deleted, worktree removed."
     tsk_note_once "$tsk_id" "$note"
     tsk_try status "$tsk_id" "done"
   else
-    report="$dir/reports/$slug-report.md"
-    done_text=$(printf 'Merged %s into %s: %s' "${sha:--}" "$base" "${summary:-(no report)}" | one_line 200)
+    done_text=$(printf 'Merged %s into %s: %s' "${sha:--}" "${ws:+$(task_repo "$slug")/}$base" "${summary:-(no report)}" | one_line 200)
     next='' checks=''
     # The report's checks and open questions, only when it follows the layout.
     if [ -f "$report" ] && checks=$(report_checks "$report"); then
@@ -151,4 +171,5 @@ if [ -n "$tsk_id" ]; then
     rm -f "$dir/tasks/$slug.tsk"
   fi
 fi
-echo "Closed $slug."
+rm -f "$dir/tasks/$key.repo"
+echo "Closed $label."
