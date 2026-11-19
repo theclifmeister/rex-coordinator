@@ -148,6 +148,31 @@ check_slug() {
 
 have_tsk() { command -v tsk >/dev/null 2>&1; }
 
+# --- Rex layout of the coordinator's tab (start.sh, stop.sh) ---------------
+# Best-effort: a Rex failure only warns. Blocks are closed only by the ID we
+# recorded (state's tsk_block=), never by label or pattern.
+rex_warn() { echo "rex-coordinator: warning: $*" >&2; }
+
+rex_block_window() { # rex_block_window <session> <block>: its window ID, empty if it is gone
+  [ -n "$1" ] && [ -n "$2" ] || return 0
+  rex block inspect -s "$1" "$2" --json 2>/dev/null | jq -r '.block.window_id // empty' 2>/dev/null || true
+}
+
+rex_window_label() { # rex_window_label <session> <window>
+  rex window inspect -s "$1" "$2" --json 2>/dev/null | jq -r '.label // empty' 2>/dev/null || true
+}
+
+rex_restore_tab() { # rex_restore_tab <session> <window> <label>: undo our rename, if it is still ours
+  [ -n "$2" ] && [ -n "$3" ] || return 0
+  [ "$(rex_window_label "$1" "$2")" = coordinator ] || return 0
+  rex window rename -s "$1" "$2" "$3" >/dev/null 2>&1 || rex_warn "could not rename tab $2 back to '$3'"
+}
+
+rex_close_board() { # rex_close_board <session> <block>: close the tsk pane we opened, if it still exists
+  [ -n "$(rex_block_window "$1" "$2")" ] || return 0
+  rex block close -s "$1" "$2" >/dev/null 2>&1 || rex_warn "could not close the tsk pane $2"
+}
+
 tsk_warn() { echo "rex-coordinator: tsk: $*" >&2; }
 
 TSK_RC=0
@@ -183,6 +208,16 @@ tsk_link_file() { # tsk_link_file <slug>: path of its link file, or return 1
 tsk_link() { # tsk_link <slug>: "<uuid> T<n>" of its linked board task, or nothing
   local f; f=$(tsk_link_file "$1") || return 0
   head -n1 "$f"
+}
+
+# rex_title_window <session> <window> <title>: name a Rex tab (window label).
+# The label is Rex's own state, so Claude Code's OSC title writes in the tab
+# don't replace it. Best-effort: a failure only warns.
+rex_title_window() {
+  [ -n "$2" ] && [ "$2" != null ] || { echo "rex-coordinator: no window ID: tab not titled '$3'" >&2; return 0; }
+  rex window rename -s "$1" "$2" "$3" >/dev/null 2>&1 \
+    || echo "rex-coordinator: could not title tab $2 '$3'" >&2
+  return 0
 }
 
 thread_name() { # thread_name <branch>: a tsk thread name for it (letters, digits, - and .)

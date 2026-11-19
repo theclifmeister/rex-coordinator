@@ -28,6 +28,10 @@ if [ "$feature" != "$cur" ]; then
 fi
 
 old=$(state_get block || true)
+old_session=$(state_get session || true)
+old_tsk=$(state_get tsk_block || true)
+old_win=$(state_get tab_window || true)
+old_label=$(state_get tab_label || true)
 # Open tasks without a .base were cut from the last recorded feature branch:
 # pin that before it is overwritten.
 last=$(state_get feature || true)
@@ -48,7 +52,48 @@ exclude="$(git rev-parse --path-format=absolute --git-common-dir)/info/exclude"
 mkdir -p "$(dirname "$exclude")"
 grep -qxF '.claude/worktrees/' "$exclude" 2>/dev/null || echo '.claude/worktrees/' >> "$exclude"
 
+# Rex layout, best-effort: name this tab "coordinator" and keep one tsk board
+# pane beside this pane (labelled "tsk", so tsk's own alt+t focuses it). A
+# rerun reuses the recorded pane while it is still in this tab; focus stays here.
+win=$(rex_block_window "$REX_SESSION" "$REX_BLOCK")
+if [ -z "$win" ]; then
+  rex_warn "could not find this pane's tab in Rex: tab not renamed, no tsk pane"
+else
+  if [ "$win" = "$old_win" ] && [ -n "$old_label" ]; then
+    label=$old_label # renamed by an earlier run: keep the tab's own name for stop.sh
+  else
+    [ -z "$old_win" ] || rex_restore_tab "$old_session" "$old_win" "$old_label"
+    label=$(rex_window_label "$REX_SESSION" "$win")
+  fi
+  if rex window rename -s "$REX_SESSION" "$win" coordinator >/dev/null 2>&1; then
+    state_set tab_window "$win"
+    [ -z "$label" ] || [ "$label" = coordinator ] || state_set tab_label "$label"
+  else
+    rex_warn "could not rename this tab to 'coordinator'"
+  fi
+  tb=""
+  if [ -n "$old_tsk" ]; then
+    if [ "$(rex_block_window "$old_session" "$old_tsk")" = "$win" ]; then
+      tb=$old_tsk
+    else
+      rex_close_board "$old_session" "$old_tsk" # beside an earlier coordinator pane
+    fi
+  fi
+  if [ -z "$tb" ]; then
+    if tsk_bin=$(command -v tsk); then
+      tb=$(rex split -s "$REX_SESSION" -b "$REX_BLOCK" --split=right --ratio 40 --focus=false \
+             --label tsk -c "$root" --json -- "$tsk_bin" 2>/dev/null \
+           | jq -r '.block_ids[0] // empty' 2>/dev/null) || tb=""
+      [ -n "$tb" ] || rex_warn "could not open the tsk board pane beside this pane"
+    else
+      echo "Note: tsk not found, so no tsk board pane." >&2
+    fi
+  fi
+  [ -z "$tb" ] || state_set tsk_block "$tb"
+fi
+
 [ -n "$old" ] && [ "$old" != "$REX_BLOCK" ] && echo "Replaced previous coordinator $old."
 echo "Coordinator: $REX_BLOCK"
 echo "Feature branch: $feature ($(git -C "$root" rev-parse --short "$feature"))"
 echo "State: $dir"
+[ -z "${tb:-}" ] || echo "tsk board pane: $tb"
