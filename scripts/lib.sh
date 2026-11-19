@@ -67,21 +67,12 @@ repo_root() { # main checkout, even when called from a worktree
   dirname "$(git rev-parse --path-format=absolute --git-common-dir)"
 }
 
-# Task commands that don't handle workspace mode yet: require_coordinator
-# refuses them there (the per-repo task lifecycle is still to come).
-WS_PENDING="new-task.sh launch-worker.sh finish-task.sh research.sh finish-feature.sh"
-
 require_coordinator() {
   [ "${CLAUDE_ROLE:-}" != worker ] || die "CLAUDE_ROLE=worker: workers don't coordinate"
   [ -n "${REX_BLOCK:-}" ] || die "REX_BLOCK is not set: not running in a Rex pane"
   [ -f "$(state_dir)/state" ] || die "no coordinator set for this repo (run /coordinator-start)"
   [ "$(state_get block)" = "$REX_BLOCK" ] \
     || die "this pane ($REX_BLOCK) is not the coordinator ($(state_get block))"
-  if ws_mode; then
-    case " $WS_PENDING " in
-      *" ${0##*/} "*) die "workspace mode ($(ws_root)): ${0##*/} is not yet supported; task commands still work only with a single-repo coordinator" ;;
-    esac
-  fi
   return 0
 }
 
@@ -142,6 +133,31 @@ rex_block_alive() { # rex_block_alive <session> <block>: true while that Rex pan
   [ -n "$2" ] || return 1
   if [ -n "$1" ]; then rex block inspect -s "$1" "$2" >/dev/null 2>&1
   else rex block inspect "$2" >/dev/null 2>&1; fi
+}
+
+# --- workspace tasks (new-task, launch-worker, finish-task, research) ------
+# In workspace mode every task and research topic lives in one member repo,
+# named with --repo and kept in tasks/<slug>.repo (tasks/research-<topic>.repo):
+# its worktree is <ws>/<repo>/.claude/worktrees/<slug> (_research/<topic>).
+# Slugs are unique across the workspace, because the state files are flat.
+
+ws_check_repo() { # ws_check_repo <repo>: die unless it is a git repo directly under the workspace
+  local r
+  [ -n "${1:-}" ] || die "workspace mode ($(ws_root)): name the repo with --repo <name> (one of: $(ws_repos | paste -sd' ' -))"
+  for r in $(ws_repos); do [ "$r" = "$1" ] && return 0; done
+  die "workspace mode: no git repo '$1' directly under $(ws_root) (repos: $(ws_repos | paste -sd' ' -))"
+}
+
+ensure_excluded() { # ensure_excluded <root>: .claude/worktrees/ in that repo's .git/info/exclude
+  local ex
+  ex="$(git -C "$1" rev-parse --path-format=absolute --git-common-dir)/info/exclude" || return 0
+  mkdir -p "$(dirname "$ex")"
+  grep -qxF '.claude/worktrees/' "$ex" 2>/dev/null || echo '.claude/worktrees/' >> "$ex"
+}
+
+task_label() { # task_label <slug|research-topic> [<name>]: "<repo>/<name>" in workspace mode, else <name> (default: the slug)
+  local r; r=$(task_repo "$1")
+  if [ -n "$r" ] && ws_mode; then echo "$r/${2:-$1}"; else echo "${2:-$1}"; fi
 }
 
 # --- the feature branch ---------------------------------------------------
@@ -272,7 +288,13 @@ checkout_dirty() { # checkout_dirty <root>: true if tracked files have uncommitt
 # features/<feature, / as -->.pr holds key=value lines: feature=, target=,
 # url=, number=, repo= (gh's HOST/OWNER/REPO), created=, and merged= once
 # finish-feature.sh --merge merged it.
-feature_pr_file() { echo "$(state_dir)/features/${1//\//--}.pr"; } # feature_pr_file <feature>
+# In workspace mode the file is features/<repo>--<feature, / as -->.pr and
+# also holds ws_repo=<repo>.
+feature_pr_file() { # feature_pr_file <feature> [<repo>]
+  local f=${1//\//--}
+  [ -z "${2:-}" ] || f="$2--$f"
+  echo "$(state_dir)/features/$f.pr"
+}
 
 kv_get() { [ -f "$1" ] || return 0; sed -n "s/^$2=//p" "$1" | head -n1; } # kv_get <file> <key>: nothing if absent
 

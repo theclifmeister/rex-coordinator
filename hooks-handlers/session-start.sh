@@ -99,7 +99,7 @@ Feature branch switches:$change"
   ctx="This Rex pane ($REX_BLOCK) is the COORDINATOR for the workspace $ws: $n git repos directly under it, each with its own feature branch (the branch checked out in the repo's main checkout $ws/<repo>; switching it is a plain git checkout there). Scripts work from the workspace folder or any repo in it.
 $fb$change
 
-Workspace mode is partly built: status.sh, stop.sh, tell.sh, board.sh and the watchers work, but the task commands (new-task.sh, launch-worker.sh, finish-task.sh, research.sh, finish-feature.sh) are not supported yet and refuse. Tell the user before planning tasks.
+In workspace mode every task command names its repo: new-task.sh <slug> --repo <name>, research.sh <topic> --repo <name>, finish-feature.sh --repo <name> (one or more); launch-worker.sh and finish-task.sh read the repo from the task. Merge each task in its repo's main checkout (git -C $ws/<repo>).
 
 Before replying to anything, load the rex-coordinator:coordinator skill and follow it: you only coordinate, and every task goes to a fresh worker Claude in its own Rex tab and worktree. Plugin scripts are in $root/scripts. Start by running $root/scripts/status.sh to pick up tasks from earlier sessions."
 else

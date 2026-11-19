@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# finish-feature.sh [--into <target>] [--title <text>] [--yes] [--merge]
+# finish-feature.sh [--repo <name>]... [--into <target>] [--title <text>] [--yes] [--merge]
 # — wrap the feature branch (the main checkout's branch) up into a GitHub PR
 # to <target> (default: origin/HEAD's branch, else main).
 #
@@ -20,48 +20,126 @@
 # a main checkout that is not on a branch, dirty or mid-merge/rebase, feature
 # == target, nothing ahead of origin/<target>, or gh missing, logged out or a
 # remote that is not GitHub. Exit: 0 done, 1 refused, 2 plan only.
-# Single repo for now: everything below is keyed off one $root.
+# Workspace mode: --repo <name> (required) runs all of it in that repo
+# (<ws>/<repo>, its feature branch, its tasks; ledger lines "<repo>/<slug>";
+# the record is features/<repo>--<feature>.pr with ws_repo=<repo>). Several
+# --repo flags run it once per repo, after checking all of them first (one
+# refusal refuses all); with --yes each repo gets its own PR, every PR body
+# then gets a "Part of: <the other PR urls>" line (gh pr edit), and a summary
+# lists them all.
+# Everything below is keyed off one $root.
 source "$(dirname "$0")/lib.sh"
 require_coordinator
-usage="usage: finish-feature.sh [--into <target>] [--title <text>] [--yes] [--merge]"
-target='' title='' yes=0 merge=0
+usage="usage: finish-feature.sh [--repo <name>]... [--into <target>] [--title <text>] [--yes] [--merge]"
+target='' title='' yes=0 merge=0 repos=() fwd=()
 while [ $# -gt 0 ]; do
   case $1 in
-    --into) [ $# -ge 2 ] || die "$usage"; target=$2; shift 2 ;;
-    --into=*) target=${1#--into=}; shift ;;
-    --title) [ $# -ge 2 ] || die "$usage"; title=$2; shift 2 ;;
-    --title=*) title=${1#--title=}; shift ;;
+    --repo) [ $# -ge 2 ] || die "$usage"; repos+=("$2"); shift 2 ;;
+    --repo=*) repos+=("${1#--repo=}"); shift ;;
+    --into) [ $# -ge 2 ] || die "$usage"; target=$2; fwd+=(--into "$2"); shift 2 ;;
+    --into=*) target=${1#--into=}; fwd+=(--into "$target"); shift ;;
+    --title) [ $# -ge 2 ] || die "$usage"; title=$2; fwd+=(--title "$2"); shift 2 ;;
+    --title=*) title=${1#--title=}; fwd+=(--title "$title"); shift ;;
     --yes) yes=1; shift ;;
     --merge) merge=1; shift ;;
     *) die "$usage" ;;
   esac
 done
-dir=$(state_dir); root=$(repo_root)
+dir=$(state_dir); ws='' wsrepo=''
+if ws=$(ws_root); then
+  [ ${#repos[@]} -gt 0 ] || ws_check_repo ''
+  for r in "${repos[@]}"; do ws_check_repo "$r"; done
+  if [ ${#repos[@]} -gt 1 ]; then
+    # One run per repo: first all of them as a plan (nothing pushed), so one
+    # refusal stops the lot; then, with --yes or --merge, the real runs.
+    seen=' '
+    for r in "${repos[@]}"; do
+      case $seen in *" $r "*) die "--repo $r is given twice" ;; esac; seen+="$r "
+    done
+    # With --yes/--merge the plans are only shown for a repo that refuses.
+    refused=''
+    for r in "${repos[@]}"; do
+      rc=0; out=$("$0" --repo "$r" ${fwd[@]+"${fwd[@]}"} 2>&1) || rc=$?
+      # --merge refuses on warnings unless --yes: so does the check of every repo.
+      if [ "$rc" = 2 ] && [ $merge = 1 ] && [ $yes = 0 ] && grep -q '^Warning:' <<<"$out"; then
+        rc=1; out+=$'\n'"(--merge refuses on these warnings: rerun with --merge --yes if the user accepts them)"
+      fi
+      if [ "$rc" = 1 ] || { [ $yes = 0 ] && [ $merge = 0 ]; }; then
+        echo "== $r =="; printf '%s\n\n' "$out"
+      fi
+      [ "$rc" != 1 ] || refused+=" $r"
+    done
+    [ -z "$refused" ] || die "finish-feature refused for:$refused (see above); nothing was pushed or merged in any repo"
+    if [ $yes = 0 ] && [ $merge = 0 ]; then
+      echo "Plan only, for ${#repos[@]} repos. Ask the user, then rerun with the same --repo flags and --yes."
+      exit 2
+    fi
+    flags=(); [ $yes = 0 ] || flags+=(--yes); [ $merge = 0 ] || flags+=(--merge)
+    urls=() failed=''
+    for r in "${repos[@]}"; do
+      echo "== $r: ${flags[*]} =="
+      tmp=$(mktemp "${TMPDIR:-/tmp}/rexc-ff.XXXXXX")
+      rc=0; "$0" --repo "$r" ${fwd[@]+"${fwd[@]}"} "${flags[@]}" 2>&1 | tee "$tmp" || rc=$? # pipefail: the run's exit
+      u=$(grep -Eo 'https?://[^ ]+/pull/[0-9]+' "$tmp" | tail -n1 || true)
+      rm -f "$tmp"; echo
+      if [ "$rc" = 0 ] && [ -n "$u" ]; then urls+=("$r $u"); else failed+=" $r"; fi
+    done
+    # Cross-link the PRs: "Part of: <the others>" in each body, replacing an older such line.
+    if [ $merge = 0 ] && [ ${#urls[@]} -gt 1 ]; then
+      for ru in "${urls[@]}"; do
+        u=${ru#* }; others=''
+        for o in "${urls[@]}"; do [ "${o#* }" = "$u" ] || others+="${others:+ }${o#* }"; done
+        body=$(gh pr view "$u" --json body -q .body 2>/dev/null) \
+          || { echo "rex-coordinator: could not read the body of $u: no Part of line" >&2; continue; }
+        tmp=$(mktemp "${TMPDIR:-/tmp}/rexc-pr.XXXXXX")
+        printf '%s\n' "$body" | awk -v line="Part of: $others" '
+          /^Part of: / { next }
+          !done && index($0, "🤖 Generated with") == 1 { print line; print ""; done = 1 }
+          { print } END { if (!done) { print ""; print line } }' > "$tmp"
+        gh pr edit "$u" --body-file "$tmp" >/dev/null 2>&1 \
+          || echo "rex-coordinator: gh pr edit failed for $u: no Part of line" >&2
+        rm -f "$tmp"
+      done
+    fi
+    echo "Summary ($([ $merge = 1 ] && echo merged || echo pull requests)):"
+    for ru in ${urls[@]+"${urls[@]}"}; do echo "  ${ru%% *}: ${ru#* }"; done
+    [ -z "$failed" ] || { echo "  failed:$failed (see above)"; exit 1; }
+    if [ $merge = 0 ]; then
+      echo "Watch their checks in the background, one each: $(dirname "$0")/pr-watch.sh <url>"
+    fi
+    exit 0
+  fi
+  wsrepo=${repos[0]}; root="$ws/$wsrepo"
+else
+  [ ${#repos[@]} = 0 ] || die "--repo is for workspace mode only: this coordinator covers one repo"
+  root=$(repo_root)
+fi
+where="the main checkout"; [ -z "$wsrepo" ] || where="$wsrepo's main checkout"
 attribution='🤖 Generated with [Claude Code](https://claude.com/claude-code)'
 problems=() warnings=()
 problem() { problems+=("$*"); }
 warning() { warnings+=("$*"); }
 
 # --- what to wrap up -------------------------------------------------------
-resolve_feature || true
+resolve_feature ${wsrepo:+"$wsrepo"} || true
 feature=$FEATURE
-if [ -z "$(checkout_branch)" ]; then
-  problem "the main checkout ($root) is not on a branch (detached HEAD or rebase in progress): check out the feature branch"
+if [ -z "$(checkout_branch "$root")" ]; then
+  problem "$where ($root) is not on a branch (detached HEAD or rebase in progress): check out the feature branch"
   feature=
 fi
 [ -z "$FEATURE_NOTE" ] || echo "rex-coordinator: $FEATURE_NOTE" >&2
 busy=$(checkout_busy "$root")
-[ -z "$busy" ] || problem "the main checkout has $busy in progress: finish it first"
-! checkout_dirty "$root" || problem "the main checkout ($root) has uncommitted changes: commit or stash them first"
+[ -z "$busy" ] || problem "$where has $busy in progress: finish it first"
+! checkout_dirty "$root" || problem "$where ($root) has uncommitted changes: commit or stash them first"
 
 if [ -z "$target" ]; then
   target=$(git -C "$root" symbolic-ref --short -q refs/remotes/origin/HEAD 2>/dev/null || true)
   target=${target#origin/}; target=${target:-main}
 fi
 [ -z "$feature" ] || [ "$feature" != "$target" ] \
-  || problem "the main checkout is on $target, the target itself: check out the feature branch (or pass --into <target>)"
+  || problem "$where is on $target, the target itself: check out the feature branch (or pass --into <target>)"
 if [ -n "$feature" ]; then
-  on=$(tasks_based_on "$feature")
+  on=$(tasks_based_on ${wsrepo:+"$wsrepo"} "$feature")
   [ -z "$on" ] || problem "open tasks are based on $feature: $on (merge and finish them, or abandon them, first)"
 fi
 
@@ -81,7 +159,7 @@ gh_repo() { # gh_repo <url>: HOST/OWNER/REPO for a GitHub remote URL, or return 
 url=$(git -C "$root" config --get remote.origin.url 2>/dev/null || true)
 repo=''
 if [ -z "$url" ]; then
-  problem "this repo has no 'origin' remote"
+  problem "${wsrepo:-this repo} has no 'origin' remote"
 elif ! repo=$(gh_repo "$url"); then
   repo=''; problem "origin ($url) is not a GitHub repository"
 fi
@@ -124,6 +202,10 @@ included='' excluded='' slugs=''
 if [ $fetched = 1 ] && [ -f "$dir/history.md" ]; then
   while IFS=$'\x1f' read -r slug status sha tnum summary; do
     [ -n "$sha" ] && [ "$sha" != - ] || continue
+    # Workspace mode: only this repo's lines ("<repo>/<slug>"), shown without the repo.
+    if [ -n "$wsrepo" ]; then
+      case $slug in "$wsrepo"/*) slug=${slug#"$wsrepo"/} ;; *) continue ;; esac
+    fi
     item="- $slug${tnum:+ ($tnum)}: $summary"
     case $status in
       merged)
@@ -169,7 +251,7 @@ if [ $fetched = 1 ] && [ "$ahead" -gt 0 ]; then
 fi
 
 # --- the open PR -------------------------------------------------------------
-prf=''; [ -z "$feature" ] || prf=$(feature_pr_file "$feature")
+prf=''; [ -z "$feature" ] || prf=$(feature_pr_file "$feature" "$wsrepo")
 pr_url='' pr_num=''
 if [ ${#problems[@]} = 0 ]; then
   open=$(ghr pr list --head "$feature" --state open --json url,number 2>/dev/null) \
@@ -182,9 +264,10 @@ record_pr() { # record_pr <url> <number>
   local created; created=$(kv_get "$prf" created); created=${created:-$(date +%F)}
   mkdir -p "$(dirname "$prf")"
   printf 'feature=%s\ntarget=%s\nurl=%s\nnumber=%s\nrepo=%s\ncreated=%s\n' \
-    "$feature" "$target" "$1" "$2" "$repo" "$created" > "$prf.tmp.$$" && mv -f "$prf.tmp.$$" "$prf"
+    "$feature" "$target" "$1" "$2" "$repo" "$created" > "$prf.tmp.$$" \
+    && { [ -z "$wsrepo" ] || echo "ws_repo=$wsrepo" >> "$prf.tmp.$$"; } && mv -f "$prf.tmp.$$" "$prf"
 }
-ledger() { echo "- $(date +%F) $feature pr #$1 — $2 | pr: $3" >> "$dir/history.md" 2>/dev/null || true; }
+ledger() { echo "- $(date +%F) ${wsrepo:+$wsrepo/}$feature pr #$1 — $2 | pr: $3" >> "$dir/history.md" 2>/dev/null || true; }
 
 report_refusal() {
   echo "rex-coordinator: finish-feature refused:" >&2
@@ -241,6 +324,7 @@ body=$(
   echo "$attribution"
 )
 
+[ -z "$wsrepo" ] || echo "Repo:     $wsrepo ($root)"
 echo "Feature:  $feature ($ahead commit$([ "$ahead" = 1 ] || echo s) ahead of origin/$target)"
 echo "Target:   $target on $repo"
 if [ -n "$pr_url" ]; then echo "PR:       reuse #$pr_num $pr_url"

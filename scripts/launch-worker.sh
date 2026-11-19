@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # launch-worker.sh <slug> — start a fresh worker Claude in a new Rex tab, in
 # the task's worktree, without taking focus. Prints the worker's block ID.
-# Titles the tab "<T-number>: <branch>" (just "<branch>" without a board task).
+# Titles the tab "<T-number>: <branch>" (just "<branch>" without a board task;
+# workspace mode: "<T-number>: <repo>/<branch>").
 # With a linked board task: sets it started (--no-dispatch) and, once, appends
 # the block, branch, worktree and brief to its notes.
 source "$(dirname "$0")/lib.sh"
 require_coordinator
 slug=${1:-}; check_slug "$slug"
-dir=$(state_dir); root=$(repo_root)
+dir=$(state_dir); root=$(task_root "$slug")
 wt="$root/.claude/worktrees/$slug"
 brief=$(state_file brief "$slug")
 [ -d "$wt" ] || die "no worktree for $slug (run new-task.sh first)"
@@ -27,7 +28,7 @@ echo "$block"
 # Tab title "<T-number>: <branch>" (just "<branch>" without a board task).
 read -r tsk_id tsk_num _ <<<"$(tsk_link "$slug")" || true
 window=$(echo "$out" | jq -r '.window_id // empty' 2>/dev/null) || window=
-rex_title_window "$session" "$window" "${tsk_num:+$tsk_num: }$slug"
+rex_title_window "$session" "$window" "${tsk_num:+$tsk_num: }$(task_label "$slug")"
 
 # Board mirror, only after the tab is up. Never fails the launch.
 if [ -n "${tsk_id:-}" ] && have_tsk; then
@@ -35,7 +36,7 @@ if [ -n "${tsk_id:-}" ] && have_tsk; then
   if task=$(tsk_task "$tsk_id"); then
     notes=$(jq -r '.notes // ""' <<<"$task")
     if ! grep -qF "$block" <<<"$notes"; then
-      tsk_try edit "$tsk_id" --append-notes="Rex worker $(date +%F): block $block · branch $slug off $(task_base "$slug") · worktree $wt · brief $brief"
+      tsk_try edit "$tsk_id" --append-notes="Rex worker $(date +%F): block $block · branch $slug off $(task_base "$slug")$(r=$(task_repo "$slug"); [ -z "$r" ] || echo " in $r") · worktree $wt · brief $brief"
     fi
   else
     tsk_warn "could not read $tsk_id: notes not updated (append is not safe to repeat blind)"

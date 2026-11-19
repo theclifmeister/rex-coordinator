@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # pr-watch.sh <pr-url> — wait for a feature PR's checks (gh pr checks --watch)
 # and end with exactly one line: "PR CHECKS PASS <feature> <url>" or
-# "PR CHECKS FAIL <feature> <url>". Run it with run_in_background after
+# "PR CHECKS FAIL <feature> <url>" (workspace mode: <feature> is
+# "<repo>/<feature>", from the record's ws_repo=). Run it with run_in_background after
 # finish-feature.sh --yes. Read-only. A PR with no checks reported after
 # about two minutes counts as PASS, with a note before the line.
 source "$(dirname "$0")/lib.sh"
@@ -12,7 +13,10 @@ dir=$(state_dir)
 feature=''
 for f in "$dir"/features/*.pr; do
   [ -f "$f" ] && [ "$(kv_get "$f" url)" = "$url" ] || continue
-  feature=$(kv_get "$f" feature); break
+  feature=$(kv_get "$f" feature)
+  # Workspace mode: "<repo>/<feature>" (still one word).
+  r=$(kv_get "$f" ws_repo); [ -z "$r" ] || feature="$r/$feature"
+  break
 done
 [ -n "$feature" ] || feature=$(gh pr view "$url" --json headRefName -q .headRefName 2>/dev/null || true)
 feature=${feature:-?}

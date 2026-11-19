@@ -82,13 +82,14 @@ done
 prs=
 for f in "$dir"/features/*.pr; do
   [ -f "$f" ] && [ -z "$(kv_get "$f" merged)" ] || continue
-  prs+="  $(kv_get "$f" feature) -> $(kv_get "$f" target)  #$(kv_get "$f" number) $(kv_get "$f" url)  (since $(kv_get "$f" created))"$'\n'
+  r=$(kv_get "$f" ws_repo)
+  prs+="  ${r:+$r: }$(kv_get "$f" feature) -> $(kv_get "$f" target)  #$(kv_get "$f" number) $(kv_get "$f" url)  (since $(kv_get "$f" created))"$'\n'
 done
 if [ -n "$prs" ]; then echo; echo "Feature PRs (open; finish-feature.sh --merge merges, on the user's say-so):"; printf '%s' "$prs"; fi
 echo
 if [ -n "$ws" ]; then
   # Only the repos that have tasks: nine worktree lists would be noise.
-  wrepos=$(for f in "$dir"/tasks/*.repo; do [ -f "$f" ] && head -n1 "$f"; done | sort -u)
+  wrepos=$(for f in "$dir"/tasks/*.repo; do [ -f "$f" ] || continue; head -n1 "$f"; done | sort -u)
   echo "Worktrees:"
   if [ -z "$wrepos" ]; then echo "  no tasks in any repo"; fi
   for r in $wrepos; do
