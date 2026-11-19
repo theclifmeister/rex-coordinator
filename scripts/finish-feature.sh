@@ -115,7 +115,7 @@ else
   root=$(repo_root)
 fi
 where="the main checkout"; [ -z "$wsrepo" ] || where="$wsrepo's main checkout"
-attribution='🤖 Generated with [Claude Code](https://claude.com/claude-code)'
+attribution=$ATTRIBUTION
 problems=() warnings=()
 problem() { problems+=("$*"); }
 warning() { warnings+=("$*"); }
@@ -133,8 +133,7 @@ busy=$(checkout_busy "$root")
 ! checkout_dirty "$root" || problem "$where ($root) has uncommitted changes: commit or stash them first"
 
 if [ -z "$target" ]; then
-  target=$(git -C "$root" symbolic-ref --short -q refs/remotes/origin/HEAD 2>/dev/null || true)
-  target=${target#origin/}; target=${target:-main}
+  target=$(default_target "$root")
 fi
 [ -z "$feature" ] || [ "$feature" != "$target" ] \
   || problem "$where is on $target, the target itself: check out the feature branch (or pass --into <target>)"
@@ -144,31 +143,10 @@ if [ -n "$feature" ]; then
 fi
 
 # --- GitHub ------------------------------------------------------------------
-gh_repo() { # gh_repo <url>: HOST/OWNER/REPO for a GitHub remote URL, or return 1
-  local u=$1 host path
-  case $u in
-    https://*|http://*|ssh://*|git://*) u=${u#*://}; u=${u#*@}; host=${u%%/*}; path=${u#*/} ;;
-    *@*:*) u=${u#*@}; host=${u%%:*}; path=${u#*:} ;;
-    *) return 1 ;;
-  esac
-  host=${host%%:*}; path=${path%.git}; path=${path%/}
-  [ "$host" = github.com ] || [ "$host" = "${GH_HOST:-github.com}" ] || return 1 # GH_HOST: GitHub Enterprise
-  [[ $path =~ ^[^/]+/[^/]+$ ]] || return 1
-  echo "$host/$path"
-}
+gh_check "$root" "${wsrepo:-this repo}"
+for p in ${GH_PROBLEMS[@]+"${GH_PROBLEMS[@]}"}; do problem "$p"; done
+repo=$GH_REPO
 url=$(git -C "$root" config --get remote.origin.url 2>/dev/null || true)
-repo=''
-if [ -z "$url" ]; then
-  problem "${wsrepo:-this repo} has no 'origin' remote"
-elif ! repo=$(gh_repo "$url"); then
-  repo=''; problem "origin ($url) is not a GitHub repository"
-fi
-host=${repo%%/*}
-if ! command -v gh >/dev/null 2>&1; then
-  problem "gh (the GitHub CLI) is not installed: https://cli.github.com"
-elif [ -n "$repo" ] && ! gh auth status --hostname "$host" >/dev/null 2>&1; then
-  problem "gh is not logged in to $host (gh auth login)"
-fi
 ghr() { gh "$@" -R "$repo"; }
 
 # --- the remote target ---------------------------------------------------------
