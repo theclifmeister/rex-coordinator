@@ -12,7 +12,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/state-path.sh"
 # the repo. State still in the old <git-common-dir>/rex-coordinator is moved
 # there on first use; a symlink stays at the old path, so workers briefed
 # with old paths and absolute paths in older history lines keep working.
-state_dir() {
+repo_state_dir() { # the cwd's git repo's own state dir (single-repo mode)
   local common dir old
   common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) \
     || die "not inside a git repository"
@@ -25,16 +25,51 @@ state_dir() {
   echo "$dir"
 }
 
+# Workspace mode: one coordinator for a folder that is not a git repo but
+# holds git repos as direct children. Its state is keyed by that folder
+# (state_path_for_dir) and holds mode=workspace, root=<folder> and
+# feature.<repo>=<branch> per repo. state_dir finds it from any cwd under it,
+# member repos and their worktrees included:
+#  1. a workspace at or above $PWD whose block= is this pane ($REX_BLOCK);
+#  2. else the cwd's git repo's own state, when it has one (as before);
+#  3. else any workspace at or above $PWD (status.sh, stop.sh run by hand);
+#  4. else the git repo's state dir (no state yet), or "not inside a git repository".
+# A script may pin the answer in _STATE_DIR (start.sh does: it picks the mode).
+_STATE_DIR=
+state_dir() {
+  local ws dir
+  [ -z "$_STATE_DIR" ] || { echo "$_STATE_DIR"; return 0; }
+  if [ -n "${REX_BLOCK:-}" ]; then
+    ws=$(ws_state_walk "$PWD" "$REX_BLOCK")
+    [ -z "$ws" ] || { echo "$ws"; return 0; }
+  fi
+  if git rev-parse --git-common-dir >/dev/null 2>&1; then
+    dir=$(repo_state_dir)
+    if [ ! -f "$dir/state" ]; then
+      ws=$(ws_state_walk "$PWD")
+      [ -z "$ws" ] || { echo "$ws"; return 0; }
+    fi
+    echo "$dir"; return 0
+  fi
+  ws=$(ws_state_walk "$PWD")
+  [ -n "$ws" ] || die "not inside a git repository"
+  echo "$ws"
+}
+
 state_get() { # state_get <key>
   local f
   f="$(state_dir)/state"
   [ -f "$f" ] || return 0
-  sed -n "s/^$1=//p" "$f" | head -n1
+  awk -v k="$1" 'index($0, k "=") == 1 { print substr($0, length(k) + 2); exit }' "$f"
 }
 
 repo_root() { # main checkout, even when called from a worktree
   dirname "$(git rev-parse --path-format=absolute --git-common-dir)"
 }
+
+# Task commands that don't handle workspace mode yet: require_coordinator
+# refuses them there (the per-repo task lifecycle is still to come).
+WS_PENDING="new-task.sh launch-worker.sh finish-task.sh research.sh finish-feature.sh"
 
 require_coordinator() {
   [ "${CLAUDE_ROLE:-}" != worker ] || die "CLAUDE_ROLE=worker: workers don't coordinate"
@@ -42,6 +77,12 @@ require_coordinator() {
   [ -f "$(state_dir)/state" ] || die "no coordinator set for this repo (run /coordinator-start)"
   [ "$(state_get block)" = "$REX_BLOCK" ] \
     || die "this pane ($REX_BLOCK) is not the coordinator ($(state_get block))"
+  if ws_mode; then
+    case " $WS_PENDING " in
+      *" ${0##*/} "*) die "workspace mode ($(ws_root)): ${0##*/} is not yet supported; task commands still work only with a single-repo coordinator" ;;
+    esac
+  fi
+  return 0
 }
 
 state_set() { # state_set <key> <value>: replace (or add) one line of the state file
@@ -51,83 +92,164 @@ state_set() { # state_set <key> <value>: replace (or add) one line of the state 
     { print } END { if (!d) print k "=" v }' "$f" > "$f.tmp.$$" && mv -f "$f.tmp.$$" "$f"
 }
 
+# --- workspace mode -------------------------------------------------------
+ws_mode() { [ "$(state_get mode)" = workspace ]; } # true for a workspace coordinator's state
+
+ws_root() { # the workspace folder; return 1 in single-repo mode
+  ws_mode || return 1
+  state_get root
+}
+
+ws_repos() { # ws_repos [<folder>]: names of its depth-1 git repos (a .git dir or file), sorted; default ws_root
+  local ws=${1:-} d
+  [ -n "$ws" ] || ws=$(ws_root) || return 0
+  for d in "$ws"/*/; do
+    d=${d%/}
+    [ -e "$d/.git" ] && echo "${d##*/}"
+  done
+  return 0
+}
+
+board_project() { # the tsk project for -p: the workspace folder in workspace mode, else the main checkout
+  ws_root || repo_root
+}
+
+task_repo() { # task_repo <slug|research-topic>: its repo name (tasks/<slug>.repo), or nothing
+  head -n1 "$(state_dir)/tasks/$1.repo" 2>/dev/null || true
+}
+
+task_root() { # task_root <slug>: the main checkout the task's worktree belongs to
+  local r ws
+  if ws=$(ws_root); then
+    r=$(task_repo "$1")
+    [ -n "$r" ] || die "task '$1' has no repo recorded (tasks/$1.repo) in workspace mode"
+    echo "$ws/$r"
+  else
+    repo_root
+  fi
+}
+
+repo_default_branch() { # repo_default_branch <root>: origin/HEAD's branch, else main or master if present, else nothing
+  local b
+  b=$(git -C "$1" symbolic-ref --short -q refs/remotes/origin/HEAD 2>/dev/null) && { echo "${b#origin/}"; return 0; }
+  for b in main master; do
+    git -C "$1" rev-parse --verify -q "refs/heads/$b" >/dev/null 2>&1 && { echo "$b"; return 0; }
+  done
+  return 0
+}
+
+rex_block_alive() { # rex_block_alive <session> <block>: true while that Rex pane exists
+  [ -n "$2" ] || return 1
+  if [ -n "$1" ]; then rex block inspect -s "$1" "$2" >/dev/null 2>&1
+  else rex block inspect "$2" >/dev/null 2>&1; fi
+}
+
 # --- the feature branch ---------------------------------------------------
 # The feature branch is whatever branch the main checkout has checked out:
 # switching is a plain `git checkout`. state's feature= is the last one seen,
 # so a switch is noticed (and reported) once. Each task keeps the branch it was
 # cut from in tasks/<slug>.base; tasks from before that file existed use
 # state's feature=, which is why a switch pins it into their .base first.
+# In workspace mode each repo has its own: feature.<repo>= in state, and the
+# functions below take the repo's name (a task always has a .base there).
 
-checkout_branch() { # the main checkout's branch; nothing if detached, mid-rebase or unborn
-  local root b; root=$(repo_root)
+checkout_branch() { # checkout_branch [<root>]: that main checkout's branch (default: this repo's); nothing if detached, mid-rebase or unborn
+  local root=${1:-} b
+  [ -n "$root" ] || root=$(repo_root)
   b=$(git -C "$root" symbolic-ref --short -q HEAD 2>/dev/null) || return 0
   git -C "$root" rev-parse --verify -q "refs/heads/$b" >/dev/null || return 0
   echo "$b"
 }
 
-open_task_slugs() { # slugs of open (non-research) tasks, one per line
+open_task_slugs() { # open_task_slugs [<repo>]: slugs of open (non-research) tasks, one per line; only that repo's when given
   local d f s; d="$(state_dir)/tasks"
   for f in "$d"/*.block "$d"/*.tsk "$d"/*.base; do
     [ -f "$f" ] || continue
     s=$(basename "$f"); s=${s%.*}
     case $s in research-*) continue ;; esac
+    if [ -n "${1:-}" ] && [ "$(head -n1 "$d/$s.repo" 2>/dev/null)" != "$1" ]; then continue; fi
     echo "$s"
   done | sort -u
 }
 
 task_base() { # task_base <slug>: the branch the task was cut from (and merges into)
-  local f; f="$(state_dir)/tasks/$1.base"
-  if [ -s "$f" ]; then head -n1 "$f"; else state_get feature; fi
+  local f r; f="$(state_dir)/tasks/$1.base"
+  if [ -s "$f" ]; then head -n1 "$f"
+  elif r=$(task_repo "$1") && [ -n "$r" ]; then state_get "feature.$r"
+  else state_get feature; fi
 }
 
-tasks_based_on() { # tasks_based_on <branch>: open task slugs whose base is <branch>, space-separated
-  local s out=
-  for s in $(open_task_slugs); do [ "$(task_base "$s")" = "$1" ] && out+=" $s"; done
+# tasks_based_on [<repo>] <branch>: open task slugs whose base is <branch>,
+# space-separated; with a repo (workspace mode), only that repo's tasks.
+tasks_based_on() {
+  local s out='' repo='' br=$1
+  [ $# -lt 2 ] || { repo=$1; br=$2; }
+  for s in $(open_task_slugs "$repo"); do [ "$(task_base "$s")" = "$br" ] && out+=" $s"; done
   echo "${out# }"
 }
 
-feature_change_note() { # feature_change_note <old> <new>
-  local on; on=$(tasks_based_on "$1")
+feature_change_note() { # feature_change_note <old> <new> [<repo>]
+  local on
+  if [ -n "${3:-}" ]; then
+    on=$(tasks_based_on "$3" "$1")
+    printf '%s: feature branch changed from %s to %s' "$3" "$1" "$2"
+    if [ -n "$on" ]; then
+      printf "; open tasks still based on %s: %s (merge each with %s's main checkout on %s)\n" "$1" "$on" "$3" "$1"
+    else printf '\n'; fi
+    return 0
+  fi
+  on=$(tasks_based_on "$1")
   printf 'feature branch changed from %s to %s' "$1" "$2"
   if [ -n "$on" ]; then
     printf '; open tasks still based on %s: %s (merge each with the main checkout on %s)\n' "$1" "$on" "$1"
   else printf '\n'; fi
 }
 
-# resolve_feature: sets FEATURE (the current feature branch), FEATURE_NOTE (the
-# change note, when the coordinator sees a new branch for the first time) and
-# FEATURE_WARN (when the main checkout is on no branch and the last seen one
-# is used). Run in the coordinator pane, it records a new branch as last seen,
-# after pinning tasks without a .base to the old one. Returns 1 if there is
-# no branch at all.
-FEATURE='' FEATURE_NOTE='' FEATURE_WARN=''
+# resolve_feature [<repo>]: sets FEATURE (the current feature branch),
+# FEATURE_NOTE (the change note, when the coordinator sees a new branch for
+# the first time) and FEATURE_WARN (when the main checkout is on no branch and
+# the last seen one is used); FEATURE_LAST is the branch seen before a change
+# (with FEATURE_NOTE). Run in the coordinator pane, it records a new
+# branch as last seen, after pinning tasks without a .base to the old one.
+# Returns 1 if there is no branch at all. In workspace mode it needs the repo's
+# name and works on that repo (feature.<repo>=; no pinning).
+FEATURE='' FEATURE_NOTE='' FEATURE_WARN='' FEATURE_LAST=''
 resolve_feature() {
-  local cur last s d
-  FEATURE='' FEATURE_NOTE='' FEATURE_WARN=''
-  cur=$(checkout_branch); last=$(state_get feature)
+  local cur last s d repo='' key=feature where='the main checkout' root=''
+  FEATURE='' FEATURE_NOTE='' FEATURE_WARN='' FEATURE_LAST=''
+  if ws_mode; then
+    repo=${1:-}
+    [ -n "$repo" ] || { FEATURE_WARN="workspace mode: name the repo"; return 1; }
+    root="$(ws_root)/$repo"
+    [ -e "$root/.git" ] || { FEATURE_WARN="workspace mode: no repo '$repo' in $(ws_root)"; return 1; }
+    key="feature.$repo" where="$repo's main checkout"
+  fi
+  cur=$(checkout_branch "$root"); last=$(state_get "$key")
   if [ -z "$cur" ]; then
-    [ -n "$last" ] || { FEATURE_WARN="the main checkout is on no branch (detached HEAD or rebase in progress) and no feature branch was recorded"; return 1; }
+    [ -n "$last" ] || { FEATURE_WARN="$where is on no branch (detached HEAD or rebase in progress) and no feature branch was recorded"; return 1; }
     FEATURE=$last
-    FEATURE_WARN="the main checkout is on no branch (detached HEAD or rebase in progress): using the last feature branch, $last"
+    FEATURE_WARN="$where is on no branch (detached HEAD or rebase in progress): using the last feature branch, $last"
     return 0
   fi
   FEATURE=$cur
   if [ -n "$last" ] && [ "$cur" != "$last" ]; then
-    FEATURE_NOTE=$(feature_change_note "$last" "$cur")
+    FEATURE_NOTE=$(feature_change_note "$last" "$cur" "$repo")
+    # shellcheck disable=SC2034 # read by the scripts that source this
+    FEATURE_LAST=$last
   fi
   if [ "$cur" != "$last" ] && [ "${CLAUDE_ROLE:-}" != worker ] \
      && [ -n "${REX_BLOCK:-}" ] && [ "$(state_get block)" = "$REX_BLOCK" ]; then
     d="$(state_dir)/tasks"
-    if [ -n "$last" ]; then
+    if [ -n "$last" ] && [ -z "$repo" ]; then
       for s in $(open_task_slugs); do [ -s "$d/$s.base" ] || echo "$last" > "$d/$s.base"; done
     fi
-    state_set feature "$cur"
+    state_set "$key" "$cur"
   fi
   return 0
 }
 
-feature_branch() { # the current feature branch on stdout; warning and change note on stderr
-  resolve_feature || { echo "rex-coordinator: $FEATURE_WARN" >&2; return 1; }
+feature_branch() { # feature_branch [<repo>]: the current feature branch on stdout; warning and change note on stderr
+  resolve_feature "${1:-}" || { echo "rex-coordinator: $FEATURE_WARN" >&2; return 1; }
   [ -z "$FEATURE_WARN" ] || echo "rex-coordinator: $FEATURE_WARN" >&2
   [ -z "$FEATURE_NOTE" ] || echo "rex-coordinator: $FEATURE_NOTE" >&2
   echo "$FEATURE"
@@ -162,7 +284,8 @@ check_slug() {
 # doctor.sh requires tsk >= 0.14.1 at activation, but every board call stays
 # best-effort: skipped when tsk is not (or no longer) installed, and a
 # failure only warns (to stderr), never fails the git/Rex work. Project-scoped
-# calls always pass -p "$(repo_root)"; starts always pass --no-dispatch.
+# calls always pass -p "$(board_project)" (the main checkout, or the
+# workspace folder in workspace mode); starts always pass --no-dispatch.
 # A coordinator task's board link is tasks/<slug>.tsk while it is open, and
 # review/<slug>.tsk after merge until the user closes it. Line 1 of a link file
 # is "<uuid> T<n>"; board-watch.sh may add a "seen=<key>" line.

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# stop.sh — turn the coordinator flow off for this repo. Leaves tasks alone;
-# closes the tsk board pane start.sh opened and restores the tab name.
+# stop.sh — turn the coordinator flow off for this repo (or workspace). Leaves
+# tasks alone; closes the tsk board pane start.sh opened and restores the tab name.
 source "$(dirname "$0")/lib.sh"
-dir=$(state_dir)
+dir=$(state_dir); _STATE_DIR=$dir
 [ -f "$dir/state" ] || { echo "No coordinator is set for this repo."; exit 0; }
 open=""
 for f in "$dir"/tasks/*.block; do
@@ -15,8 +15,9 @@ done
 session=$(state_get session || true)
 rex_close_board "$session" "$(state_get tsk_block || true)"
 rex_restore_tab "$session" "$(state_get tab_window || true)" "$(state_get tab_label || true)"
+if ws=$(ws_root); then what="the workspace $ws"; else what=$(repo_root); fi
 rm -f "$dir/state"
-echo "Coordinator flow stopped for $(repo_root)."
+echo "Coordinator flow stopped for $what."
 if [ -n "$open" ]; then
   echo "Still open (tabs/worktrees left as they are):"
   printf '%s' "$open"

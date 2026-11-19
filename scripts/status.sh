@@ -6,9 +6,36 @@
 # slug, its steps progress (steps done/total) and drift flags (!): worker
 # gone but task started, blocked with a reply, review sent back, open task
 # with no board task.
+# Workspace mode: a "Repos:" block instead of the feature branch (one line per
+# repo; repos on their default branch with no tasks folded into one line),
+# each task's repo, worktrees of the repos that have tasks, and the board of
+# the workspace folder and its repos (tsk list --all --json, filtered by path).
 source "$(dirname "$0")/lib.sh"
-dir=$(state_dir)
+dir=$(state_dir); _STATE_DIR=$dir
 if [ ! -f "$dir/state" ]; then echo "No coordinator set for this repo."; exit 0; fi
+ws=; feats=
+if ws=$(ws_root); then
+  root=$ws; feature=
+  echo "Workspace:         $ws"
+  echo "Repos:"
+  folded='' notes=''
+  for r in $(ws_repos "$ws"); do
+    resolve_feature "$r" || true
+    feats+="$r $FEATURE"$'\n'
+    open=$(open_task_slugs "$r" | tr '\n' ' '); open=${open% }
+    def=$(repo_default_branch "$ws/$r")
+    flag=; [ -z "$FEATURE_NOTE" ] || flag="  (!) changed from $FEATURE_LAST"
+    if [ -z "$open" ] && [ -z "$FEATURE_NOTE" ] && [ -z "$FEATURE_WARN" ] && [ -n "$FEATURE" ] && [ "$FEATURE" = "$def" ]; then
+      folded+="${folded:+, }$r"; continue
+    fi
+    sha=$(git -C "$ws/$r" rev-parse --short "${FEATURE:-HEAD}" 2>/dev/null || echo '?')
+    echo "  $r  ${FEATURE:-no branch} @ $sha${open:+  open: $open}$flag"
+    [ -z "$FEATURE_WARN" ] || notes+="  (!) $r: $FEATURE_WARN"$'\n'
+    case $FEATURE_NOTE in *"open tasks still based"*) notes+="  (!) $FEATURE_NOTE"$'\n' ;; esac
+  done
+  [ -z "$folded" ] || echo "  on their default branch, no tasks: $folded"
+  printf '%s' "$notes"
+else
 root=$(repo_root)
 resolve_feature || true; feature=$FEATURE
 if [ -n "$feature" ]; then
@@ -19,6 +46,7 @@ else
 fi
 [ -z "$FEATURE_WARN" ] || echo "  (!) $FEATURE_WARN"
 [ -z "$FEATURE_NOTE" ] || echo "  (!) $FEATURE_NOTE"
+fi
 echo "Coordinator block: $(state_get block)"
 [ "$(state_get block)" = "${REX_BLOCK:-}" ] && echo "  (this pane)" || echo "  (NOT this pane: ${REX_BLOCK:-none})"
 echo "State:             $dir"
@@ -37,11 +65,17 @@ for f in "$dir"/tasks/*.block; do
       echo "  $slug  tab=$block ($alive)  reads=${at:-?}  $report" ;;
     *)
       base=$(task_base "$slug")
-      ahead=$(git -C "$root" rev-list --count "$base..$slug" 2>/dev/null || echo "?")
+      troot=$root repo='' rf=$feature
+      if [ -n "$ws" ]; then
+        repo=$(task_repo "$slug"); troot="$ws/${repo:-?}"
+        rf=$(awk -v r="$repo" '$1 == r { print $2; exit }' <<<"$feats")
+      fi
+      ahead=$(git -C "$troot" rev-list --count "$base..$slug" 2>/dev/null || echo "?")
       board=$(tsk_link "$slug" | cut -d' ' -f2)
-      other=; [ -z "$feature" ] || [ "$base" = "$feature" ] \
-        || other="  (!) base is not the feature branch: merge it with the main checkout on $base"
-      echo "  $slug  tab=$block ($alive)  base=${base:-?}  commits=$ahead  $report  board=${board:-none (!)}$other" ;;
+      where="the main checkout"; [ -z "$repo" ] || where="$repo's main checkout"
+      other=; [ -z "$rf" ] || [ "$base" = "$rf" ] \
+        || other="  (!) base is not the feature branch: merge it with $where on $base"
+      echo "  $slug  ${ws:+repo=${repo:-? (!)}  }tab=$block ($alive)  base=${base:-?}  commits=$ahead  $report  board=${board:-none (!)}$other" ;;
   esac
 done
 [ $found = 1 ] || echo "  none"
@@ -52,7 +86,17 @@ for f in "$dir"/features/*.pr; do
 done
 if [ -n "$prs" ]; then echo; echo "Feature PRs (open; finish-feature.sh --merge merges, on the user's say-so):"; printf '%s' "$prs"; fi
 echo
-echo "Worktrees:"; git -C "$root" worktree list | sed 's/^/  /'
+if [ -n "$ws" ]; then
+  # Only the repos that have tasks: nine worktree lists would be noise.
+  wrepos=$(for f in "$dir"/tasks/*.repo; do [ -f "$f" ] && head -n1 "$f"; done | sort -u)
+  echo "Worktrees:"
+  if [ -z "$wrepos" ]; then echo "  no tasks in any repo"; fi
+  for r in $wrepos; do
+    echo "  $r:"; git -C "$ws/$r" worktree list 2>/dev/null | sed 's/^/    /' || true
+  done
+else
+  echo "Worktrees:"; git -C "$root" worktree list | sed 's/^/  /'
+fi
 echo
 echo "tsk board ($root):"
 if ! have_tsk; then echo "  tsk not installed"; exit 0; fi
@@ -86,7 +130,14 @@ flag() { # flag <task-json> <slug> <kind>: drift notes for one linked task
   fi
   return 0
 }
-rc=0; rows=$(tsk list -p "$root" --json 2>&1) || rc=$?
+rc=0
+if [ -n "$ws" ]; then
+  # The workspace folder's project and its repos' own projects, in one read.
+  rows=$(tsk list --all --json 2>&1) || rc=$?
+  [ $rc != 0 ] || rows=$(jq -c --arg ws "$ws" '[.[] | select((.project // "") as $p | $p == $ws or ($p | startswith($ws + "/")))]' <<<"$rows" 2>&1) || rc=$?
+else
+  rows=$(tsk list -p "$root" --json 2>&1) || rc=$?
+fi
 if [ $rc != 0 ] || ! jq -e 'type == "array"' <<<"$rows" >/dev/null 2>&1; then
   echo "  could not read the board (exit $rc): $rows" | head -n3
   rows='[]'
@@ -105,7 +156,10 @@ while IFS=$'\x1f' read -r id num st on title; do
   fi
   echo "  T$num $st${on:+ (on $on)} $title$extra"
 done < <(jq -r '.[] | [.id, (.number|tostring), .status, (.block.on // .review.on // ""), .title] | join("\u001f")' <<<"$rows")
-[ -n "$listed" ] || echo "  no live tasks for this repo (tsk list --all --json shows every project)"
+if [ -z "$listed" ]; then
+  if [ -n "$ws" ]; then echo "  no live tasks for this workspace or its repos (tsk list --all --json shows every project)"
+  else echo "  no live tasks for this repo (tsk list --all --json shows every project)"; fi
+fi
 # Linked tasks the live list leaves out (done, archived, elsewhere).
 while read -r id lslug kind; do
   [ -n "$id" ] || continue
