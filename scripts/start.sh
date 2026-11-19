@@ -74,6 +74,7 @@ fi
 old=$(state_get block || true)
 old_session=$(state_get session || true)
 old_tsk=$(state_get tsk_block || true)
+old_tsk_layer=$(state_get tsk_layer || true)
 old_win=$(state_get tab_window || true)
 old_label=$(state_get tab_label || true)
 if [ $mode = single ]; then
@@ -130,25 +131,31 @@ else
   else
     rex_warn "could not rename this tab to 'coordinator'"
   fi
-  tb=""
+  tb="" tl=""
   if [ -n "$old_tsk" ]; then
+    # Reuse the board while it is in this tab, as the user left it (open or
+    # minimized). An older version's split board is replaced by a floating one.
     if [ "$(rex_block_window "$old_session" "$old_tsk")" = "$win" ]; then
-      tb=$old_tsk
-    else
-      rex_close_board "$old_session" "$old_tsk" # beside an earlier coordinator pane
+      read -r tl tsk_kind _ <<<"$(rex_block_layer "$old_session" "$old_tsk")" || true
+      if [ "${tsk_kind:-}" = floating ] || ! rex_has_layers; then
+        tb=$old_tsk
+        [ "${tsk_kind:-}" = floating ] || tl=""
+      else
+        tl=""
+      fi
     fi
+    [ -n "$tb" ] || rex_close_board "$old_session" "$old_tsk" "$old_tsk_layer"
   fi
   if [ -z "$tb" ]; then
     if tsk_bin=$(command -v tsk); then
-      tb=$(rex split -s "$REX_SESSION" -b "$REX_BLOCK" --split=right --ratio 40 --focus=false \
-             --label tsk -c "$root" --json -- "$tsk_bin" 2>/dev/null \
-           | jq -r '.block_ids[0] // empty' 2>/dev/null) || tb=""
-      [ -n "$tb" ] || rex_warn "could not open the tsk board pane beside this pane"
+      read -r tb tl <<<"$(rex_open_board "$REX_SESSION" "$win" "$REX_BLOCK" "$root" "$tsk_bin")" || true
+      [ -n "$tb" ] || rex_warn "could not open the tsk board pane"
     else
       echo "Note: tsk not found, so no tsk board pane." >&2
     fi
   fi
   [ -z "$tb" ] || state_set tsk_block "$tb"
+  [ -z "$tl" ] || state_set tsk_layer "$tl"
 fi
 
 [ -n "$old" ] && [ "$old" != "$REX_BLOCK" ] && echo "Replaced previous coordinator $old."
@@ -164,4 +171,4 @@ else
   done
 fi
 echo "State: $dir"
-[ -z "${tb:-}" ] || echo "tsk board pane: $tb"
+[ -z "${tb:-}" ] || echo "tsk board pane: $tb${tl:+ (floating, layer $tl)}"
