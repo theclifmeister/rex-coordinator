@@ -34,6 +34,8 @@ done
 dir=$(state_dir); root=$(repo_root)
 # The branch the task was cut from (tasks/<slug>.base; older tasks: state's feature=).
 base=$(task_base "$slug")
+brief=$(state_file brief "$slug"); report=$(state_file report "$slug")
+answer=$(state_file research "$slug")
 wt="$root/.claude/worktrees/$slug"
 
 # A research tab has no branch: nothing to merge, just close it.
@@ -70,8 +72,8 @@ ledger_line() {
   tnum=${tsk_num:+ $tsk_num}
   if [ $research = 1 ]; then
     status=research; sha=$research_ref
-    refs="research: research/$slug.md"
-    echo "- $(date +%F) $slug $status $sha — $(summary_of "$dir/research/$slug.md") | $refs"
+    refs="research: ${answer#"$dir"/}"
+    echo "- $(date +%F) $slug $status $sha — $(summary_of "$answer") | $refs"
     return
   fi
   if [ "$abandon" = --abandon ]; then
@@ -83,8 +85,8 @@ ledger_line() {
     [ -n "$sha" ] || sha=$(git -C "$root" rev-parse "$base" 2>/dev/null) || sha=-
     [ "$sha" = - ] || sha=$(git -C "$root" rev-parse --short "$sha" 2>/dev/null) || sha=-
   fi
-  refs="brief: briefs/$slug.md | report: reports/$slug-report.md"
-  echo "- $(date +%F) $slug $status ${sha:--}$tnum — $(summary_of "$dir/reports/$slug-report.md") | $refs"
+  refs="brief: ${brief#"$dir"/} | report: ${report#"$dir"/}"
+  echo "- $(date +%F) $slug $status ${sha:--}$tnum — $(summary_of "$report") | $refs"
 }
 tsk_id='' tsk_num=''
 if [ $research = 0 ] && [ -f "$dir/tasks/$slug.tsk" ]; then
@@ -92,7 +94,7 @@ if [ $research = 0 ] && [ -f "$dir/tasks/$slug.tsk" ]; then
 fi
 entry=$(ledger_line 2>/dev/null) || entry=
 # "- <date> <slug> <status> <sha> ..." -> the sha, for the board.
-sha=$(cut -d' ' -f5 <<<"$entry"); summary=$(summary_of "$dir/reports/$slug-report.md" 2>/dev/null) || summary=
+sha=$(cut -d' ' -f5 <<<"$entry"); summary=$(summary_of "$report" 2>/dev/null) || summary=
 
 # Only this slug's own tab: a task and a research topic may share a name.
 tabf="$dir/tasks/$slug.block"; [ $research = 1 ] && tabf="$dir/tasks/research-$slug.block"
@@ -101,7 +103,9 @@ if [ -f "$tabf" ]; then
   rm -f "$tabf"
 fi
 
-if [ $research = 1 ]; then rm -f "$dir/tasks/research-$slug.ref"; else rm -f "$dir/tasks/$slug.base"; fi
+# The .date goes too: state_file then finds the dated files by their prefix.
+if [ $research = 1 ]; then rm -f "$dir/tasks/research-$slug.ref" "$dir/tasks/research-$slug.date"
+else rm -f "$dir/tasks/$slug.base" "$dir/tasks/$slug.date"; fi
 # The local install record Claude Code made for the worker's worktree (see
 # plugin_drop_local_record in lib.sh), while the worktree is still there.
 # Best-effort and silent on failure; skipped without claude.
@@ -128,7 +132,6 @@ if [ -n "$tsk_id" ]; then
     tsk_note_once "$tsk_id" "$note"
     tsk_try status "$tsk_id" "done"
   else
-    report="$dir/reports/$slug-report.md"
     done_text=$(printf 'Merged %s into %s: %s' "${sha:--}" "$base" "${summary:-(no report)}" | one_line 200)
     next='' checks=''
     # The report's checks and open questions, only when it follows the layout.

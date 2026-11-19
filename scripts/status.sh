@@ -29,10 +29,10 @@ for f in "$dir"/tasks/*.block; do
   [ -e "$f" ] || continue; found=1
   slug=$(basename "$f" .block); block=$(cat "$f")
   alive=gone; rex block inspect "$block" >/dev/null 2>&1 && alive=open
-  report=-; [ -f "$dir/reports/$slug-report.md" ] && report="report ready"
+  report=-; case $slug in research-*) ;; *) [ -f "$(state_file report "$slug")" ] && report="report ready" ;; esac
   case $slug in
     research-*)
-      t=${slug#research-}; report=-; [ -s "$dir/research/$t.md" ] && report="answer ready"
+      t=${slug#research-}; report=-; [ -s "$(state_file research "$t")" ] && report="answer ready"
       at=$(research_reads "$dir/tasks/$slug.ref")
       echo "  $slug  tab=$block ($alive)  reads=${at:-?}  $report" ;;
     *)

@@ -3,6 +3,8 @@
 # feature branch (the main checkout's current branch), and a brief skeleton to
 # fill in. Prints the brief path. tasks/<slug>.base records that branch: the
 # task merges back into it, even if the main checkout switches meanwhile.
+# tasks/<slug>.date holds today's YYMMDD, the prefix of the task's brief
+# (briefs/YYMMDD-<slug>.md) and report (reports/YYMMDD-<slug>-report.md).
 # Board (when tsk is installed): with T<n>, link that task (it must belong to
 # this repo and not be done); without, create one (--title is then required)
 # and link it. The link goes to tasks/<slug>.tsk, and the
@@ -27,7 +29,6 @@ done
 dir=$(state_dir); root=$(repo_root)
 feature=$(feature_branch) || die "no feature branch: check a branch out in the main checkout ($root)"
 wt="$root/.claude/worktrees/$slug"
-brief="$dir/briefs/$slug.md"
 
 git -C "$root" rev-parse --verify -q "refs/heads/$slug" >/dev/null && die "branch '$slug' already exists"
 [ -e "$wt" ] && die "$wt already exists"
@@ -61,7 +62,10 @@ fi
 
 git -C "$root" worktree add -q -b "$slug" "$wt" "$feature"
 # The task merges back into the branch it was cut from, even after a switch.
-mkdir -p "$dir/tasks"; echo "$feature" > "$dir/tasks/$slug.base"
+mkdir -p "$dir/tasks" "$dir/briefs" "$dir/reports"; echo "$feature" > "$dir/tasks/$slug.base"
+# The creation date prefixes this task's brief and report (state_file in lib.sh).
+today_stamp > "$dir/tasks/$slug.date"
+brief=$(state_file brief "$slug"); report=$(state_file report "$slug")
 
 # Project run-time needs that must not be committed (extend as needed).
 [ -d "$root/node_modules" ] && [ ! -e "$wt/node_modules" ] && ln -s "$root/node_modules" "$wt/node_modules"
@@ -109,7 +113,7 @@ sed -e "s|{{SLUG}}|$slug|g" \
     -e "s|{{WORKTREE}}|$wt|g" \
     -e "s|{{FEATURE}}|$feature|g" \
     -e "s|{{COORDINATOR_BLOCK}}|$(state_get block)|g" \
-    -e "s|{{REPORT}}|$dir/reports/$slug-report.md|g" \
+    -e "s|{{REPORT}}|$report|g" \
     -e "s|{{TSK_NUM}}|${tsk_num:-none}|g" \
     -e "s|{{TSK_ID}}|${tsk_id:-none}|g" \
     "$(dirname "$0")/../skills/coordinator/brief-template.md" > "$brief.tmp"
