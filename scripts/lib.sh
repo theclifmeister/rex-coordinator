@@ -412,7 +412,7 @@ ghr() { gh "$@" -R "$FORGE_REPO"; }
 # an origin, on GitHub or Azure DevOps, and its CLI installed and logged in
 # (Azure DevOps: the azure-devops extension too, and the repo readable).
 forge_check() {
-  local url f='' r='' out
+  local url f='' r='' out hint
   forge_use '' ''; FORGE_PROBLEMS=()
   url=$(git -C "$1" config --get remote.origin.url 2>/dev/null || true)
   if [ -z "$url" ]; then
@@ -428,10 +428,17 @@ forge_check() {
         FORGE_PROBLEMS+=("az (the Azure CLI) is not installed: https://aka.ms/azure-cli, then az extension add --name azure-devops")
       elif ! az extension show --name azure-devops -o none >/dev/null 2>&1; then
         FORGE_PROBLEMS+=("the azure-devops extension of az is not installed (az extension add --name azure-devops)")
-      elif ! az account show -o none >/dev/null 2>&1; then
-        FORGE_PROBLEMS+=("az is not logged in (az login)")
       elif ! out=$(azr repos show 2>&1 >/dev/null); then
-        FORGE_PROBLEMS+=("az can't read $AZ_ORG/$AZ_PROJECT/$AZ_REPO on Azure DevOps: $(grep -m1 . <<<"$out" | one_line 200)")
+        # Logged in either way: az login, or a PAT (az devops login). TF400813
+        # with az login is often a personal Microsoft account (a guest in the
+        # org's tenant): the extension's MSA pass-through maps it to an
+        # identity outside the org, and a PAT gets around that.
+        hint=
+        case $out in
+          *TF400813*) hint=" (with a personal Microsoft account, az login may map to a user outside the org: store a PAT with az devops login --org https://dev.azure.com/$AZ_ORG)" ;;
+          *"az login"*|*"az devops login"*) hint=" (log in: az login, or a PAT with az devops login --org https://dev.azure.com/$AZ_ORG)" ;;
+        esac
+        FORGE_PROBLEMS+=("az can't read $AZ_ORG/$AZ_PROJECT/$AZ_REPO on Azure DevOps: $(grep -m1 . <<<"$out" | one_line 200)$hint")
       fi ;;
     *)
       if ! command -v gh >/dev/null 2>&1; then
