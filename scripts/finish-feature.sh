@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # finish-feature.sh [--repo <name>]... [--into <target>] [--title <text>] [--yes] [--merge]
-# — wrap the feature branch (the main checkout's branch) up into a GitHub PR
-# to <target> (default: origin/HEAD's branch, else main).
+# — wrap the feature branch (the main checkout's branch) up into a PR to
+# <target> (default: origin/HEAD's branch, else main) on its forge: GitHub
+# or Azure DevOps, from origin's URL (the forge layer in lib.sh).
 #
 # Without --yes or --merge: check everything and print what it would do, then
 # refuse (exit 2). Nothing is pushed or created. The coordinator shows that to
@@ -13,19 +14,20 @@
 #   --yes also overrides the warnings: merged tasks still in review on the
 #   board, and conflicts with <target>.
 # --merge: merge the feature's open PR with a merge commit (gh pr merge
-#   --merge), never pushing; only on the user's say-so, after the checks pass
+#   --merge; az repos pr update --status completed --squash false), never pushing; only on the user's say-so, after the checks pass
 #   (pr-watch.sh). Then git fetch, and print (never do) the follow-ups.
 #   Warnings refuse it unless --yes is given too.
 # Refuses (listing every reason) with open tasks based on the feature branch,
 # a main checkout that is not on a branch, dirty or mid-merge/rebase, feature
-# == target, nothing ahead of origin/<target>, or gh missing, logged out or a
-# remote that is not GitHub. Exit: 0 done, 1 refused, 2 plan only.
+# == target, nothing ahead of origin/<target>, or a remote that is not on
+# GitHub or Azure DevOps, or its CLI (gh; az + azure-devops) missing or
+# logged out. Exit: 0 done, 1 refused, 2 plan only.
 # Workspace mode: --repo <name> (required) runs all of it in that repo
 # (<ws>/<repo>, its feature branch, its tasks; ledger lines "<repo>/<slug>";
 # the record is features/<repo>--<feature>.pr with ws_repo=<repo>). Several
 # --repo flags run it once per repo, after checking all of them first (one
 # refusal refuses all); with --yes each repo gets its own PR, every PR body
-# then gets a "Part of: <the other PR urls>" line (gh pr edit), and a summary
+# then gets a "Part of: <the other PR urls>" line (forge_pr_edit_body), and a summary
 # lists them all.
 # Everything below is keyed off one $root.
 source "$(dirname "$0")/lib.sh"
@@ -80,7 +82,7 @@ if ws=$(ws_root); then
       echo "== $r: ${flags[*]} =="
       tmp=$(mktemp "${TMPDIR:-/tmp}/rexc-ff.XXXXXX")
       rc=0; "$0" --repo "$r" ${fwd[@]+"${fwd[@]}"} "${flags[@]}" 2>&1 | tee "$tmp" || rc=$? # pipefail: the run's exit
-      u=$(grep -Eo 'https?://[^ ]+/pull/[0-9]+' "$tmp" | tail -n1 || true)
+      u=$(grep -Eo "$FORGE_PR_RE" "$tmp" | tail -n1 || true)
       rm -f "$tmp"; echo
       if [ "$rc" = 0 ] && [ -n "$u" ]; then urls+=("$r $u"); else failed+=" $r"; fi
     done
@@ -89,15 +91,16 @@ if ws=$(ws_root); then
       for ru in "${urls[@]}"; do
         u=${ru#* }; others=''
         for o in "${urls[@]}"; do [ "${o#* }" = "$u" ] || others+="${others:+ }${o#* }"; done
-        body=$(gh pr view "$u" --json body -q .body 2>/dev/null) \
+        forge_pr_use "$u" # its forge, from the URL
+        body=$(forge_pr_body "$u") \
           || { echo "rex-coordinator: could not read the body of $u: no Part of line" >&2; continue; }
         tmp=$(mktemp "${TMPDIR:-/tmp}/rexc-pr.XXXXXX")
         printf '%s\n' "$body" | awk -v line="Part of: $others" '
           /^Part of: / { next }
           !done && index($0, "🤖 Generated with") == 1 { print line; print ""; done = 1 }
           { print } END { if (!done) { print ""; print line } }' > "$tmp"
-        gh pr edit "$u" --body-file "$tmp" >/dev/null 2>&1 \
-          || echo "rex-coordinator: gh pr edit failed for $u: no Part of line" >&2
+        forge_pr_edit_body "$u" "$tmp" >/dev/null 2>&1 \
+          || echo "rex-coordinator: could not edit the body of $u: no Part of line" >&2
         rm -f "$tmp"
       done
     fi
@@ -115,7 +118,7 @@ else
   root=$(repo_root)
 fi
 where="the main checkout"; [ -z "$wsrepo" ] || where="$wsrepo's main checkout"
-attribution='🤖 Generated with [Claude Code](https://claude.com/claude-code)'
+attribution=$ATTRIBUTION
 problems=() warnings=()
 problem() { problems+=("$*"); }
 warning() { warnings+=("$*"); }
@@ -133,8 +136,7 @@ busy=$(checkout_busy "$root")
 ! checkout_dirty "$root" || problem "$where ($root) has uncommitted changes: commit or stash them first"
 
 if [ -z "$target" ]; then
-  target=$(git -C "$root" symbolic-ref --short -q refs/remotes/origin/HEAD 2>/dev/null || true)
-  target=${target#origin/}; target=${target:-main}
+  target=$(default_target "$root")
 fi
 [ -z "$feature" ] || [ "$feature" != "$target" ] \
   || problem "$where is on $target, the target itself: check out the feature branch (or pass --into <target>)"
@@ -143,33 +145,11 @@ if [ -n "$feature" ]; then
   [ -z "$on" ] || problem "open tasks are based on $feature: $on (merge and finish them, or abandon them, first)"
 fi
 
-# --- GitHub ------------------------------------------------------------------
-gh_repo() { # gh_repo <url>: HOST/OWNER/REPO for a GitHub remote URL, or return 1
-  local u=$1 host path
-  case $u in
-    https://*|http://*|ssh://*|git://*) u=${u#*://}; u=${u#*@}; host=${u%%/*}; path=${u#*/} ;;
-    *@*:*) u=${u#*@}; host=${u%%:*}; path=${u#*:} ;;
-    *) return 1 ;;
-  esac
-  host=${host%%:*}; path=${path%.git}; path=${path%/}
-  [ "$host" = github.com ] || [ "$host" = "${GH_HOST:-github.com}" ] || return 1 # GH_HOST: GitHub Enterprise
-  [[ $path =~ ^[^/]+/[^/]+$ ]] || return 1
-  echo "$host/$path"
-}
+# --- the forge (GitHub or Azure DevOps) -----------------------------------------
+forge_check "$root" "${wsrepo:-this repo}"
+for p in ${FORGE_PROBLEMS[@]+"${FORGE_PROBLEMS[@]}"}; do problem "$p"; done
+repo=$FORGE_REPO forge=$FORGE
 url=$(git -C "$root" config --get remote.origin.url 2>/dev/null || true)
-repo=''
-if [ -z "$url" ]; then
-  problem "${wsrepo:-this repo} has no 'origin' remote"
-elif ! repo=$(gh_repo "$url"); then
-  repo=''; problem "origin ($url) is not a GitHub repository"
-fi
-host=${repo%%/*}
-if ! command -v gh >/dev/null 2>&1; then
-  problem "gh (the GitHub CLI) is not installed: https://cli.github.com"
-elif [ -n "$repo" ] && ! gh auth status --hostname "$host" >/dev/null 2>&1; then
-  problem "gh is not logged in to $host (gh auth login)"
-fi
-ghr() { gh "$@" -R "$repo"; }
 
 # --- the remote target ---------------------------------------------------------
 fetched=0
@@ -254,17 +234,16 @@ fi
 prf=''; [ -z "$feature" ] || prf=$(feature_pr_file "$feature" "$wsrepo")
 pr_url='' pr_num=''
 if [ ${#problems[@]} = 0 ]; then
-  open=$(ghr pr list --head "$feature" --state open --json url,number 2>/dev/null) \
-    || die "gh pr list failed for $repo (head $feature)"
-  pr_url=$(jq -r '.[0].url // empty' <<<"$open" 2>/dev/null || true)
-  pr_num=$(jq -r '.[0].number // empty' <<<"$open" 2>/dev/null || true)
+  open=$(forge_pr_find "$feature" "$target") \
+    || die "could not list the PRs of $repo on $(forge_name) (head $feature)"
+  read -r pr_url pr_num <<<"$open" || true
 fi
 
 record_pr() { # record_pr <url> <number>
   local created; created=$(kv_get "$prf" created); created=${created:-$(date +%F)}
   mkdir -p "$(dirname "$prf")"
-  printf 'feature=%s\ntarget=%s\nurl=%s\nnumber=%s\nrepo=%s\ncreated=%s\n' \
-    "$feature" "$target" "$1" "$2" "$repo" "$created" > "$prf.tmp.$$" \
+  printf 'feature=%s\ntarget=%s\nurl=%s\nnumber=%s\nforge=%s\nrepo=%s\ncreated=%s\n' \
+    "$feature" "$target" "$1" "$2" "$forge" "$repo" "$created" > "$prf.tmp.$$" \
     && { [ -z "$wsrepo" ] || echo "ws_repo=$wsrepo" >> "$prf.tmp.$$"; } && mv -f "$prf.tmp.$$" "$prf"
 }
 ledger() { echo "- $(date +%F) ${wsrepo:+$wsrepo/}$feature pr #$1 — $2 | pr: $3" >> "$dir/history.md" 2>/dev/null || true; }
@@ -286,7 +265,7 @@ if [ $merge = 1 ]; then
     report_refusal "${warnings[@]}" "(rerun with --merge --yes if the user still wants it merged)"
   fi
   for w in ${warnings[@]+"${warnings[@]}"}; do echo "Warning (merging anyway, --yes): $w"; done
-  ghr pr merge "$pr_url" --merge || die "gh pr merge failed for $pr_url"
+  forge_pr_merge "$pr_url" || die "merging $pr_url on $(forge_name) failed"
   git -C "$root" fetch -q origin 2>/dev/null || echo "Note: git fetch origin failed; run it by hand." >&2
   [ -f "$prf" ] || record_pr "$pr_url" "$pr_num"
   sed -i.bak '/^merged=/d' "$prf" && rm -f "$prf.bak"; echo "merged=$(date +%F)" >> "$prf"
@@ -326,7 +305,7 @@ body=$(
 
 [ -z "$wsrepo" ] || echo "Repo:     $wsrepo ($root)"
 echo "Feature:  $feature ($ahead commit$([ "$ahead" = 1 ] || echo s) ahead of origin/$target)"
-echo "Target:   $target on $repo"
+echo "Target:   $target on $repo$([ "$forge" = github ] || echo " ($(forge_name))")"
 if [ -n "$pr_url" ]; then echo "PR:       reuse #$pr_num $pr_url"
 else echo "PR:       new, title: $title"; fi
 echo "Tasks:    ${n_tasks:-0} merged${slugs:+ (${slugs% })}"
@@ -334,7 +313,7 @@ echo "Tasks:    ${n_tasks:-0} merged${slugs:+ (${slugs% })}"
 for w in ${warnings[@]+"${warnings[@]}"}; do echo "Warning:  $w"; done
 if [ $yes = 0 ]; then
   echo
-  echo "Not pushed. Would run: git push -u origin $feature, then $([ -n "$pr_url" ] && echo "reuse #$pr_num" || echo "gh pr create --base $target --head $feature")."
+  echo "Not pushed. Would run: git push -u origin $feature, then $(if [ -n "$pr_url" ]; then echo "reuse #$pr_num"; else forge_pr_create_hint "$target" "$feature"; fi)."
   echo "Ask the user, then rerun with --yes$([ ${#warnings[@]} = 0 ] || echo " (it also accepts the warnings above)")."
   if [ -z "$pr_url" ]; then echo; echo "PR body:"; printf '%s\n' "$body" | sed 's/^/  | /'; fi
   exit 2
@@ -344,11 +323,8 @@ git -C "$root" push -u origin "$feature" || die "git push -u origin $feature fai
 if [ -z "$pr_url" ]; then
   tmp=$(mktemp "${TMPDIR:-/tmp}/rexc-pr.XXXXXX"); trap 'rm -f "$tmp"' EXIT
   printf '%s\n' "$body" > "$tmp"
-  out=$(ghr pr create --base "$target" --head "$feature" --title "$title" --body-file "$tmp") \
-    || die "gh pr create failed: $out"
-  pr_url=$(grep -Eo 'https?://[^ ]+/pull/[0-9]+' <<<"$out" | tail -n1)
-  [ -n "$pr_url" ] || die "gh pr create printed no PR URL: $out"
-  pr_num=${pr_url##*/}
+  pr_url=$(forge_pr_create "$target" "$feature" "$title" "$tmp") || die "no PR was created"
+  pr_num=$(forge_pr_id "$pr_url")
   record_pr "$pr_url" "$pr_num"
   ledger "$pr_num" "$title" "$pr_url"
   echo "Created PR #$pr_num: $pr_url"

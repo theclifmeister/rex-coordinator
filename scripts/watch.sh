@@ -8,6 +8,11 @@
 # A research tab exits when its answer file is written or the tab is gone; its
 # capture is not scanned, since the instruction typed into it already contains
 # "RESEARCH DONE <topic>".
+# Only what is new since the watcher started counts, so a restart after an
+# unblock waits instead of firing on the blocked round: a report or answer
+# file that exists at start fires only once it changes (other content, or a
+# newer mtime than the start), and a marker line already in the tab at start
+# fires only when a line with other text appears.
 # WATCH_INTERVAL / BOARD_POLL_SECS override the 15 s / 45 s polls (testing only).
 source "$(dirname "$0")/lib.sh"
 slug=${1:-}; check_slug "$slug"
@@ -18,6 +23,25 @@ f="$dir/tasks/$slug.block"
 block=$(cat "$f" 2>/dev/null) || die "no task $slug"
 report=$(state_file report "$slug"); answer=$(state_file research "$slug")
 marker="^[[:space:]]*(⏺[[:space:]]*)?REPORT (DONE|BLOCKED) ${slug//./\\.}([^a-z0-9._-]|$)"
+
+# Baselines: the file's checksum and a stamp touched now (cksum covers a
+# rewrite within the same mtime second; -nt covers one with the same text),
+# and the marker lines the tab holds now (trimmed).
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/rc-watch.XXXXXX") || die "mktemp failed"
+trap 'rm -rf "$tmp"' EXIT
+file_sig() { if [ -e "$1" ]; then cksum < "$1"; else echo none; fi; }
+markers() { # the tab's marker lines, trimmed, one per line
+  rex capture -b "$block" 2>/dev/null | grep -E "$marker" \
+    | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' || true
+}
+if [ $research = 1 ]; then watched=$answer; else watched=$report; fi
+start_sig=$(file_sig "$watched")
+touch "$tmp/start"
+file_new() { # the watched file is there (research: non-empty) and new since start
+  if [ $research = 1 ]; then [ -s "$watched" ] || return 1; else [ -f "$watched" ] || return 1; fi
+  [ "$start_sig" = none ] || [ "$watched" -nt "$tmp/start" ] || [ "$(file_sig "$watched")" != "$start_sig" ]
+}
+if [ $research = 0 ]; then markers > "$tmp/markers"; fi
 
 # Board: the reply count of the block open now is the baseline; a block that
 # opens later starts from zero.
@@ -36,15 +60,14 @@ if [ -n "$tsk_id" ]; then
 fi
 
 while :; do
-  if [ $research = 1 ]; then
-    [ -s "$answer" ] && { echo "RESEARCH FILE $slug: $answer"; exit 0; }
-  else
-    [ -f "$report" ] && { echo "REPORT FILE $slug: $report"; exit 0; }
+  if file_new; then
+    if [ $research = 1 ]; then echo "RESEARCH FILE $slug: $answer"; else echo "REPORT FILE $slug: $report"; fi
+    exit 0
   fi
   rex block inspect "$block" >/dev/null 2>&1 || { echo "TAB GONE $slug ($block) without a report"; exit 1; }
   if [ $research = 0 ]; then
-    line=$(rex capture -b "$block" 2>/dev/null | grep -E "$marker" | tail -n1 || true)
-    [ -n "$line" ] && { echo "${line#"${line%%[![:space:]]*}"}"; exit 0; }
+    line=$(markers | grep -vxF -f "$tmp/markers" | tail -n1 || true)
+    [ -n "$line" ] && { echo "$line"; exit 0; }
   fi
   now=$(date +%s)
   if [ -n "$tsk_id" ] && [ $((now - last_board)) -ge "${BOARD_POLL_SECS:-45}" ]; then

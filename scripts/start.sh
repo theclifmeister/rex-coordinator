@@ -6,7 +6,22 @@
 # Run in a folder that is not a git repo but has git repos as direct children,
 # it starts workspace mode instead (no argument): one coordinator for them all.
 # Either way it refuses while another live coordinator covers the same repo.
+# --land pr|merge|auto: how new tasks land by default (state's land=; auto,
+# the default: a PR when the task's base is the repo's default branch and
+# origin is on GitHub or Azure DevOps, else a local merge). new-task.sh --land overrides it.
 source "$(dirname "$0")/lib.sh"
+land=auto args=()
+while [ $# -gt 0 ]; do
+  case $1 in
+    --land) [ $# -ge 2 ] || die "--land needs pr, merge or auto"; land=$2; shift 2 ;;
+    --land=*) land=${1#--land=}; shift ;;
+    -*) die "usage: start.sh [feature-branch] [--land pr|merge|auto] (got '$1')" ;;
+    *) args+=("$1"); shift ;;
+  esac
+done
+case $land in pr|merge|auto) ;; *) die "--land takes pr, merge or auto (got '$land')" ;; esac
+[ ${#args[@]} -le 1 ] || die "usage: start.sh [feature-branch] [--land pr|merge|auto]"
+set -- ${args[@]+"${args[@]}"}
 [ "${CLAUDE_ROLE:-}" != worker ] || die "CLAUDE_ROLE=worker: a worker can't become the coordinator"
 [ -n "${REX_BLOCK:-}" ] || die "REX_BLOCK is not set: run this inside a Rex pane"
 [ -n "${REX_SESSION:-}" ] || die "REX_SESSION is not set"
@@ -90,6 +105,7 @@ if [ $mode = single ]; then
 block=$REX_BLOCK
 session=$REX_SESSION
 feature=$feature
+land=$land
 started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 STATE
 
@@ -104,6 +120,7 @@ else
     echo "session=$REX_SESSION"
     echo "mode=workspace"
     echo "root=$root"
+    echo "land=$land"
     for r in $repos; do
       b=$(checkout_branch "$root/$r")
       [ -z "$b" ] || echo "feature.$r=$b"
@@ -171,4 +188,8 @@ else
   done
 fi
 echo "State: $dir"
+case $land in
+  auto) echo "Landing: by base (a PR when a task's base is the repo's default branch and origin is on GitHub or Azure DevOps, else a local merge)" ;;
+  *) echo "Landing: $land for every new task (new-task.sh --land overrides)" ;;
+esac
 [ -z "${tb:-}" ] || echo "tsk board pane: $tb${tl:+ (floating, layer $tl)}"

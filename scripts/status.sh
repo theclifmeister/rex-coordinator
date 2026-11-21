@@ -10,6 +10,10 @@
 # repo; repos on their default branch with no tasks folded into one line),
 # each task's repo, worktrees of the repos that have tasks, and the board of
 # the workspace folder and its repos (tsk list --all --json, filtered by path).
+# A pr-mode task (tasks/<slug>.land) shows land=pr and its PR with the last
+# known state and checks (tasks/<slug>.pr; never asks the forge), or "pr=not yet";
+# with a PR its report is no longer "ready" (it is in review on the forge). A
+# task without a tab (not launched yet, or finish-task.sh --close-tab) shows tab=none.
 source "$(dirname "$0")/lib.sh"
 dir=$(state_dir); _STATE_DIR=$dir
 if [ ! -f "$dir/state" ]; then echo "No coordinator set for this repo."; exit 0; fi
@@ -53,10 +57,11 @@ echo "State:             $dir"
 echo
 echo "Open tasks:"
 found=0
-for f in "$dir"/tasks/*.block; do
-  [ -e "$f" ] || continue; found=1
-  slug=$(basename "$f" .block); block=$(cat "$f")
-  alive=gone; rex block inspect "$block" >/dev/null 2>&1 && alive=open
+# Research tabs, then every open task (a pr task's tab may be closed already).
+for slug in $( { for f in "$dir"/tasks/research-*.block; do [ -e "$f" ] && basename "$f" .block; done; open_task_slugs; } ); do
+  found=1
+  block=$(cat "$dir/tasks/$slug.block" 2>/dev/null || true)
+  alive=; [ -z "$block" ] || { alive=gone; rex block inspect "$block" >/dev/null 2>&1 && alive=open; }
   report=-; case $slug in research-*) ;; *) [ -f "$(state_file report "$slug")" ] && report="report ready" ;; esac
   case $slug in
     research-*)
@@ -75,7 +80,18 @@ for f in "$dir"/tasks/*.block; do
       where="the main checkout"; [ -z "$repo" ] || where="$repo's main checkout"
       other=; [ -z "$rf" ] || [ "$base" = "$rf" ] \
         || other="  (!) base is not the feature branch: merge it with $where on $base"
-      echo "  $slug  ${ws:+repo=${repo:-? (!)}  }tab=$block ($alive)  base=${base:-?}  commits=$ahead  $report  board=${board:-none (!)}$other" ;;
+      land=''
+      if [ "$(task_land "$slug")" = pr ]; then
+        prf=$(task_pr_file "$slug")
+        if [ -f "$prf" ]; then
+          pst=$(kv_get "$prf" state); pch=$(kv_get "$prf" checks)
+          land="  land=pr  pr=$(kv_get "$prf" url) (${pst:-?}${pch:+, checks $pch})"
+          [ "$report" != "report ready" ] || report="report in PR"
+        else
+          land="  land=pr  pr=not yet"
+        fi
+      fi
+      echo "  $slug  ${ws:+repo=${repo:-? (!)}  }tab=${block:-none}${alive:+ ($alive)}  base=${base:-?}  commits=$ahead  $report$land  board=${board:-none (!)}$other" ;;
   esac
 done
 [ $found = 1 ] || echo "  none"
@@ -113,7 +129,11 @@ steps() { # steps <task-json>: "  steps <done>/<total>" when it has steps (0.14 
     | ((.steps_done // ([(.steps // [])[] | select(.done)] | length)) | tonumber? // 0) as $d
     | if $t > 0 then "  steps \($d)/\($t)" else "" end' <<<"$1" 2>/dev/null || true
 }
-label() { if [ "$2" = review ]; then echo "[$1, merged]"; else echo "[$1]"; fi; }
+label() { # label <slug> <kind>: "[slug]", "[slug, merged]", or "[slug, PR]" for a pr task in review
+  if [ "$2" != review ]; then echo "[$1]"
+  elif [ -f "$(task_pr_file "$1")" ]; then echo "[$1, PR]"
+  else echo "[$1, merged]"; fi
+}
 flag() { # flag <task-json> <slug> <kind>: drift notes for one linked task
   local t=$1 slug=$2 kind=$3 st
   st=$(jq -r .status <<<"$t")

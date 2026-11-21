@@ -17,22 +17,29 @@
 # must be unused across the workspace. The board task goes in the workspace
 # folder's project (no --base: tsk refuses it for a non-git project) on thread
 # "<repo>.<feature>"; a linked task may be the workspace's or the repo's own.
+# Landing (tasks/<slug>.land): --land pr|merge, else state's land= (start.sh
+# --land), else by base (land_by_base: a PR when the base is the repo's
+# default branch and origin is on GitHub or Azure DevOps, else a local merge). In pr mode the
+# brief's <!-- pr --> lines stay: the branch becomes a PR (land-task.sh).
 source "$(dirname "$0")/lib.sh"
 require_coordinator
 slug=${1:-}; check_slug "$slug"; shift
 case $slug in research-*) die "slugs starting with 'research-' are reserved for research topics (tasks/research-<topic>.*): pick another name" ;; esac
-want='' title='' repo='' repo_given=0
-usage='usage: new-task.sh <slug> [--repo <name>] [T<n>] [--title "<text>"]'
+want='' title='' repo='' repo_given=0 land=''
+usage='usage: new-task.sh <slug> [--repo <name>] [T<n>] [--title "<text>"] [--land pr|merge]'
 while [ $# -gt 0 ]; do
   case $1 in
     --repo) [ $# -ge 2 ] || die "--repo needs a value"; repo=$2; repo_given=1; shift 2 ;;
     --repo=*) repo=${1#--repo=}; repo_given=1; shift ;;
     --title) [ $# -ge 2 ] || die "--title needs a value"; title=$2; shift 2 ;;
     --title=*) title=${1#--title=}; shift ;;
+    --land) [ $# -ge 2 ] || die "--land needs pr or merge"; land=$2; shift 2 ;;
+    --land=*) land=${1#--land=}; shift ;;
     [Tt][0-9]*|[0-9]*) [[ $1 =~ ^[Tt]?[0-9]+$ ]] || die "not a task number: $1"; want=${1#[Tt]}; shift ;;
     *) die "$usage (got '$1')" ;;
   esac
 done
+case $land in ''|pr|merge) ;; *) die "--land takes pr or merge (got '$land')" ;; esac
 dir=$(state_dir); ws=
 if ws=$(ws_root); then
   ws_check_repo "$repo"
@@ -50,6 +57,11 @@ fi
 feature=$(feature_branch ${ws:+"$repo"}) || die "no feature branch: check a branch out in the main checkout ($root)"
 wt="$root/.claude/worktrees/$slug"
 project=$(board_project)
+land_why="--land"
+if [ -z "$land" ]; then
+  land=$(state_get land || true); land_why="the coordinator's default (start.sh --land)"
+  case $land in pr|merge) ;; *) land=$(land_by_base "$root" "$feature"); land_why="by base" ;; esac
+fi
 
 git -C "$root" rev-parse --verify -q "refs/heads/$slug" >/dev/null && die "branch '$slug' already exists"
 [ -e "$wt" ] && die "$wt already exists"
@@ -94,6 +106,7 @@ mkdir -p "$dir/tasks" "$dir/briefs" "$dir/reports"; echo "$feature" > "$dir/task
 [ -z "$ws" ] || echo "$repo" > "$dir/tasks/$slug.repo"
 # The creation date prefixes this task's brief and report (state_file in lib.sh).
 today_stamp > "$dir/tasks/$slug.date"
+echo "$land" > "$dir/tasks/$slug.land"
 brief=$(state_file brief "$slug"); report=$(state_file report "$slug")
 
 # Project run-time needs that must not be committed (extend as needed).
@@ -159,18 +172,23 @@ if [ -n "$task" ]; then
             then "Steps:\n" + ([.steps[] | "- [\(if .done then "x" else " " end)] \(.text) (short_id \(.short_id))"] | join("\n"))
             else "Steps: none" end)' <<<"$task" > "$board_text"
 fi
-awk -v linked="${task:+1}" -v wsmode="${ws:+1}" -v f="$board_text" '
+awk -v linked="${task:+1}" -v wsmode="${ws:+1}" -v prmode="$([ "$land" = pr ] && echo 1)" -v f="$board_text" '
   $0 == "<!-- board -->"  { inboard = 1; next }
   $0 == "<!-- /board -->" { inboard = 0; next }
   $0 == "<!-- workspace -->"  { inws = 1; next }
   $0 == "<!-- /workspace -->" { inws = 0; next }
   inboard && !linked      { next }
   inws && !wsmode         { next }
+  $0 == "<!-- pr -->"     { inpr = 1; next }
+  $0 == "<!-- /pr -->"    { inpr = 0; next }
+  inpr && !prmode         { next }
   $0 == "{{BOARD_TASK}}"  { while ((getline l < f) > 0) print l; next }
   { print }' "$brief.tmp" > "$brief"
 rm -f "$brief.tmp" "$board_text"
 
 echo "Worktree: $wt (${ws:+repo $repo, }branch $slug off $feature @ $(git -C "$root" rev-parse --short "$feature"))"
 [ -z "$tsk_num" ] || echo "Board:    $tsk_num ($tsk_id), linked in $dir/tasks/$slug.tsk"
+if [ "$land" = pr ]; then echo "Lands:    as a PR into $feature ($land_why; land-task.sh $slug once the report is in)"
+else echo "Lands:    by a local merge into $feature ($land_why)"; fi
 echo "Brief:    $brief"
 echo "Fill in every {{TODO}} in the brief, then run launch-worker.sh $slug"

@@ -286,7 +286,8 @@ checkout_dirty() { # checkout_dirty <root>: true if tracked files have uncommitt
 
 # --- feature pull requests (finish-feature.sh, pr-watch.sh, status.sh) -------
 # features/<feature, / as -->.pr holds key=value lines: feature=, target=,
-# url=, number=, repo= (gh's HOST/OWNER/REPO), created=, and merged= once
+# url=, number=, forge= (github or azdo; none = github), repo= (FORGE_REPO:
+# github HOST/OWNER/REPO, azdo ORG/PROJECT/REPO), created=, and merged= once
 # finish-feature.sh --merge merged it.
 # In workspace mode the file is features/<repo>--<feature, / as -->.pr and
 # also holds ws_repo=<repo>.
@@ -297,6 +298,400 @@ feature_pr_file() { # feature_pr_file <feature> [<repo>]
 }
 
 kv_get() { [ -f "$1" ] || return 0; sed -n "s/^$2=//p" "$1" | head -n1; } # kv_get <file> <key>: nothing if absent
+
+kv_set() { # kv_set <file> <key> <value>: replace (or add) one key=value line
+  local f=$1 tmp="$1.tmp.$$"
+  { [ ! -f "$f" ] || grep -v "^$2=" "$f" || true; echo "$2=$3"; } > "$tmp" && mv -f "$tmp" "$f"
+}
+
+# --- forges: GitHub (gh) or Azure DevOps (az repos) --------------------------
+# finish-feature.sh, land-task.sh, pr-watch.sh, board-watch.sh, finish-task.sh.
+# A repo's forge comes from its raw remote.origin.url (an insteadOf rewrite
+# doesn't count): forge_detect. forge_use sets FORGE (github|azdo) and
+# FORGE_REPO (github: HOST/OWNER/REPO; azdo: ORG/PROJECT/REPO, URL-decoded,
+# also split into AZ_ORG, AZ_PROJECT, AZ_REPO), and every forge_* call below
+# works on those. A PR is named by its web URL; forge_pr_use <url> [<record>]
+# sets the forge from a PR record's forge=/repo= (no forge=: github, as
+# every record from before Azure DevOps) or, with no record, from the URL.
+# Adding a forge = a case in forge_parse plus one branch per forge_* call.
+# Azure DevOps: every az call names the org (--org https://dev.azure.com/<org>,
+# --detect false: no az devops configure defaults), and --project/--repository
+# where the command takes them (pr show/update/policy list take only --org).
+FORGE='' FORGE_REPO='' AZ_ORG='' AZ_PROJECT='' AZ_REPO='' FORGE_PROBLEMS=()
+
+gh_repo() { # gh_repo <url>: HOST/OWNER/REPO for a GitHub remote URL, or return 1
+  local u=$1 host path
+  case $u in
+    https://*|http://*|ssh://*|git://*) u=${u#*://}; u=${u#*@}; host=${u%%/*}; path=${u#*/} ;;
+    *@*:*) u=${u#*@}; host=${u%%:*}; path=${u#*:} ;;
+    *) return 1 ;;
+  esac
+  host=${host%%:*}; path=${path%.git}; path=${path%/}
+  [ "$host" = github.com ] || [ "$host" = "${GH_HOST:-github.com}" ] || return 1 # GH_HOST: GitHub Enterprise
+  [[ $path =~ ^[^/]+/[^/]+$ ]] || return 1
+  echo "$host/$path"
+}
+
+url_decode() { printf '%b' "${1//%/\\x}"; } # url_decode <s>: %XX escapes decoded
+url_encode() { jq -rn --arg s "$1" '$s | @uri'; } # url_encode <s>: one path segment
+
+azdo_repo() { # azdo_repo <url>: ORG/PROJECT/REPO (decoded) for an Azure DevOps remote URL, or return 1
+  local u=$1 host path org='' proj='' repo=''
+  case $u in
+    *://*) u=${u#*://}; host=${u%%/*}; path=${u#"$host"}; path=${path#/} ;;
+    *@*:*) host=${u%%:*}; path=${u#*:} ;;
+    *) return 1 ;;
+  esac
+  host=${host##*@}; host=${host%%:*}; path=${path%/}
+  case $host in
+    ssh.dev.azure.com|vs-ssh.visualstudio.com) # git@ssh.dev.azure.com:v3/ORG/PROJECT/REPO
+      [[ $path =~ ^v3/([^/]+)/([^/]+)/([^/]+)$ ]] || return 1
+      org=${BASH_REMATCH[1]} proj=${BASH_REMATCH[2]} repo=${BASH_REMATCH[3]} ;;
+    dev.azure.com) # https://[user@]dev.azure.com/ORG/PROJECT/_git/REPO (or ORG/_git/REPO)
+      if [[ $path =~ ^([^/]+)/([^/]+)/_git/([^/]+)$ ]]; then
+        org=${BASH_REMATCH[1]} proj=${BASH_REMATCH[2]} repo=${BASH_REMATCH[3]}
+      elif [[ $path =~ ^([^/]+)/_git/([^/]+)$ ]]; then
+        org=${BASH_REMATCH[1]} proj=${BASH_REMATCH[2]} repo=${BASH_REMATCH[2]}
+      else return 1; fi ;;
+    *.visualstudio.com) # https://ORG.visualstudio.com[/DefaultCollection]/PROJECT/_git/REPO
+      org=${host%%.*}
+      path=${path#[Dd]efault[Cc]ollection/}
+      if [[ $path =~ ^([^/]+)/_git/([^/]+)$ ]]; then proj=${BASH_REMATCH[1]} repo=${BASH_REMATCH[2]}
+      elif [[ $path =~ ^_git/([^/]+)$ ]]; then proj=${BASH_REMATCH[1]} repo=${BASH_REMATCH[1]}
+      else return 1; fi ;;
+    *) return 1 ;;
+  esac
+  echo "$(url_decode "$org")/$(url_decode "$proj")/$(url_decode "$repo")"
+}
+
+forge_parse() { # forge_parse <url>: "github HOST/OWNER/REPO" or "azdo ORG/PROJECT/REPO", or return 1
+  local r
+  if r=$(azdo_repo "$1"); then echo "azdo $r"
+  elif r=$(gh_repo "$1"); then echo "github $r"
+  else return 1; fi
+}
+
+forge_detect() { # forge_detect <root>: forge_parse of its origin (raw remote.origin.url), or return 1
+  local url; url=$(git -C "$1" config --get remote.origin.url 2>/dev/null) || return 1
+  forge_parse "$url"
+}
+
+forge_use() { # forge_use <forge> <repo>: set FORGE, FORGE_REPO (and AZ_*) for the forge_* calls
+  FORGE=$1 FORGE_REPO=$2 AZ_ORG='' AZ_PROJECT='' AZ_REPO=''
+  if [ "$FORGE" = azdo ]; then
+    AZ_ORG=${2%%/*} AZ_REPO=${2##*/} AZ_PROJECT=${2#*/}; AZ_PROJECT=${AZ_PROJECT%/*}
+  fi
+}
+
+forge_pr_use() { # forge_pr_use <url> [<record file>]: forge_use for that PR
+  local f='' r='' u
+  if [ -n "${2:-}" ] && [ -f "$2" ]; then
+    f=$(kv_get "$2" forge); r=$(kv_get "$2" repo); f=${f:-github}
+  else
+    u=${1%/}
+    if [[ $u =~ ^(.*)/pullrequest/[0-9]+$ ]] && r=$(azdo_repo "${BASH_REMATCH[1]}"); then f=azdo
+    else f=github; [[ $u =~ ^(.*)/pull/[0-9]+$ ]] && r=$(gh_repo "${BASH_REMATCH[1]}") || r=''; fi
+  fi
+  forge_use "$f" "$r"
+}
+
+forge_name() { case $FORGE in azdo) echo "Azure DevOps" ;; *) echo GitHub ;; esac; }
+forge_cli() { case $FORGE in azdo) echo az ;; *) echo gh ;; esac; } # the CLI the forge needs
+forge_has_cli() { command -v "$(forge_cli)" >/dev/null 2>&1; }
+FORGE_PR_RE='https?://[^ ]+/pull(request)?/[0-9]+' # a PR web URL in a tool's output
+
+forge_pr_id() { local u=${1%/}; echo "${u##*/}"; } # forge_pr_id <url>: the PR number/id
+
+# az with the org (and, azr, the project and repo) of FORGE_REPO; JSON out.
+azo() { az "$@" --org "https://dev.azure.com/$(url_encode "$AZ_ORG")" --detect false --only-show-errors -o json; }
+azr() { azo "$@" --project "$AZ_PROJECT" --repository "$AZ_REPO"; }
+ghr() { gh "$@" -R "$FORGE_REPO"; }
+
+# forge_check <root> <name>: forge_use for that repo's origin, and
+# FORGE_PROBLEMS (one reason per entry) for pushing there and opening PRs:
+# an origin, on GitHub or Azure DevOps, and its CLI installed and logged in
+# (Azure DevOps: the azure-devops extension too, and the repo readable).
+forge_check() {
+  local url f='' r='' out hint
+  forge_use '' ''; FORGE_PROBLEMS=()
+  url=$(git -C "$1" config --get remote.origin.url 2>/dev/null || true)
+  if [ -z "$url" ]; then
+    FORGE_PROBLEMS+=("$2 has no 'origin' remote")
+  elif read -r f r < <(forge_parse "$url"); then
+    forge_use "$f" "$r"
+  else
+    FORGE_PROBLEMS+=("origin ($url) is not a GitHub or Azure DevOps repository")
+  fi
+  case $FORGE in
+    azdo)
+      if ! command -v az >/dev/null 2>&1; then
+        FORGE_PROBLEMS+=("az (the Azure CLI) is not installed: https://aka.ms/azure-cli, then az extension add --name azure-devops")
+      elif ! az extension show --name azure-devops -o none >/dev/null 2>&1; then
+        FORGE_PROBLEMS+=("the azure-devops extension of az is not installed (az extension add --name azure-devops)")
+      elif ! out=$(azr repos show 2>&1 >/dev/null); then
+        # Logged in either way: az login, or a PAT (az devops login). TF400813
+        # with az login is often a personal Microsoft account (a guest in the
+        # org's tenant): the extension's MSA pass-through maps it to an
+        # identity outside the org, and a PAT gets around that.
+        hint=
+        case $out in
+          *TF400813*) hint=" (with a personal Microsoft account, az login may map to a user outside the org: store a PAT with az devops login --org https://dev.azure.com/$AZ_ORG)" ;;
+          *"az login"*|*"az devops login"*) hint=" (log in: az login, or a PAT with az devops login --org https://dev.azure.com/$AZ_ORG)" ;;
+        esac
+        FORGE_PROBLEMS+=("az can't read $AZ_ORG/$AZ_PROJECT/$AZ_REPO on Azure DevOps: $(grep -m1 . <<<"$out" | one_line 200)$hint")
+      fi ;;
+    *)
+      if ! command -v gh >/dev/null 2>&1; then
+        FORGE_PROBLEMS+=("gh (the GitHub CLI) is not installed: https://cli.github.com")
+      elif [ -n "$FORGE_REPO" ] && ! gh auth status --hostname "${FORGE_REPO%%/*}" >/dev/null 2>&1; then
+        FORGE_PROBLEMS+=("gh is not logged in to ${FORGE_REPO%%/*} (gh auth login)")
+      fi ;;
+  esac
+  return 0
+}
+
+forge_pr_url() { # forge_pr_url <number>: the PR's web URL
+  case $FORGE in
+    azdo) printf 'https://dev.azure.com/%s/%s/_git/%s/pullrequest/%s\n' \
+            "$(url_encode "$AZ_ORG")" "$(url_encode "$AZ_PROJECT")" "$(url_encode "$AZ_REPO")" "$1" ;;
+    *) echo "https://$FORGE_REPO/pull/$1" ;;
+  esac
+}
+
+forge_pr_find() { # forge_pr_find <head> [<base>]: "<url> <number>" of its open PR, nothing if none; 1 if the CLI failed
+  local out
+  case $FORGE in
+    azdo)
+      out=$(azr repos pr list --source-branch "$1" ${2:+--target-branch "$2"} --status active) || return 1
+      out=$(jq -r '.[0].pullRequestId // empty' <<<"$out" 2>/dev/null) || return 1
+      [ -z "$out" ] || echo "$(forge_pr_url "$out") $out" ;;
+    *)
+      out=$(ghr pr list --head "$1" --state open --json url,number 2>/dev/null) || return 1
+      jq -r '.[0] // empty | "\(.url) \(.number)"' <<<"$out" 2>/dev/null || return 1 ;;
+  esac
+}
+
+# Azure DevOps keeps at most 4000 characters of a PR description: a longer
+# body is cut at a line, with a note, and keeps its last line (the attribution).
+AZDO_BODY_MAX=4000
+forge_fit_body() { # forge_fit_body <file>: trim it in place to the forge's limit
+  [ "$FORGE" = azdo ] || return 0
+  local body last note keep
+  body=$(cat "$1")
+  [ ${#body} -gt $AZDO_BODY_MAX ] || return 0
+  last=$(tail -n1 <<<"$body")
+  note=$'\n\n'"(Trimmed to Azure DevOps' $AZDO_BODY_MAX-character limit for PR descriptions.)"$'\n\n'"$last"
+  keep=${body:0:$((AZDO_BODY_MAX - ${#note} - 10))}
+  keep=${keep%$'\n'*}
+  printf '%s%s\n' "$keep" "$note" > "$1"
+}
+
+forge_pr_create() { # forge_pr_create <base> <head> <title> <body-file>: prints the new PR's URL
+  local out id t=$3
+  case $FORGE in
+    azdo)
+      forge_fit_body "$4"
+      [[ $t != @* ]] || t=" $t" # az reads "@<path>" arguments as files
+      out=$(azr repos pr create --target-branch "$1" --source-branch "$2" --title "$t" \
+              --description "@$4" 2>&1) || { echo "az repos pr create failed: $out" >&2; return 1; }
+      id=$(jq -r '.pullRequestId // empty' <<<"$out" 2>/dev/null) || id=
+      [ -n "$id" ] || { echo "az repos pr create returned no PR id: $out" >&2; return 1; }
+      forge_pr_url "$id" ;;
+    *)
+      out=$(ghr pr create --base "$1" --head "$2" --title "$t" --body-file "$4") \
+        || { echo "gh pr create failed: $out" >&2; return 1; }
+      id=$(grep -Eo "$FORGE_PR_RE" <<<"$out" | tail -n1) \
+        || { echo "gh pr create printed no PR URL: $out" >&2; return 1; }
+      echo "$id" ;;
+  esac
+}
+
+forge_pr_state() { # forge_pr_state <url>: "OPEN|MERGED|CLOSED [<merge commit sha>]"; 1 if unreadable
+  local v
+  case $FORGE in
+    azdo)
+      v=$(azo repos pr show --id "$(forge_pr_id "$1")" 2>/dev/null) || return 1
+      jq -er '(.status // "") as $s
+        | if $s == "completed" then "MERGED \(.lastMergeCommit.commitId // "")"
+          elif $s == "abandoned" then "CLOSED"
+          elif $s == "active" then "OPEN"
+          else empty end' <<<"$v" 2>/dev/null ;;
+    *)
+      v=$(gh pr view "$1" --json state,mergeCommit 2>/dev/null) || return 1
+      jq -er 'select(.state // "" | length > 0) | "\(.state) \(.mergeCommit.oid // "")"' <<<"$v" 2>/dev/null ;;
+  esac
+}
+
+forge_pr_body() { # forge_pr_body <url>: the PR's description
+  case $FORGE in
+    azdo) azo repos pr show --id "$(forge_pr_id "$1")" 2>/dev/null | jq -r '.description // ""' ;;
+    *) gh pr view "$1" --json body -q .body 2>/dev/null ;;
+  esac
+}
+
+forge_pr_head() { # forge_pr_head <url>: the PR's source branch
+  case $FORGE in
+    azdo) azo repos pr show --id "$(forge_pr_id "$1")" 2>/dev/null | jq -r '.sourceRefName // "" | sub("^refs/heads/"; "")' ;;
+    *) gh pr view "$1" --json headRefName -q .headRefName 2>/dev/null ;;
+  esac
+}
+
+forge_pr_edit_body() { # forge_pr_edit_body <url> <body-file>
+  case $FORGE in
+    azdo) forge_fit_body "$2"; azo repos pr update --id "$(forge_pr_id "$1")" --description "@$2" >/dev/null ;;
+    *) gh pr edit "$1" --body-file "$2" >/dev/null ;;
+  esac
+}
+
+forge_pr_merge() { # forge_pr_merge <url>: merge it with a merge commit (the user's say-so only)
+  local i st
+  case $FORGE in
+    azdo)
+      azo repos pr update --id "$(forge_pr_id "$1")" --status completed --squash false >/dev/null || return 1
+      # Completion can be queued: wait (about a minute) until it is merged.
+      for ((i = 0; i < ${FORGE_MERGE_TRIES:-12}; i++)); do
+        st=$(forge_pr_state "$1" || true)
+        case $st in MERGED*) return 0 ;; CLOSED*) echo "$1 was abandoned" >&2; return 1 ;; esac
+        sleep "${FORGE_MERGE_WAIT:-5}"
+      done
+      echo "$1 is not completed yet (Azure DevOps queues completion; a policy or a conflict may hold it): look at it there" >&2
+      return 1 ;;
+    *) ghr pr merge "$1" --merge ;;
+  esac
+}
+
+forge_pr_create_hint() { # forge_pr_create_hint <base> <head>: the create command, for a plan
+  case $FORGE in
+    azdo) echo "az repos pr create --target-branch $1 --source-branch $2" ;;
+    *) echo "gh pr create --base $1 --head $2" ;;
+  esac
+}
+
+forge_pr_close_hint() { # forge_pr_close_hint <url>: the command that closes it (printed, never run)
+  case $FORGE in
+    azdo) echo "az repos pr update --id $(forge_pr_id "$1") --status abandoned --org https://dev.azure.com/$(url_encode "$AZ_ORG")" ;;
+    *) echo "gh pr close $1" ;;
+  esac
+}
+
+# forge_pr_checks <url>: the PR's checks right now, on the first line one of
+# PASS (all passed), FAIL (one failed), PENDING (some still running) or NONE
+# (none reported), then notes, if any. Azure DevOps: the PR's policy
+# evaluations of type Build and Status (the CI ones) decide; rejected or
+# broken = FAIL; other policies (reviewers, comments, work items) only get
+# a note line while they are not approved.
+AZDO_CHECK_TYPES='0609b952-1397-4640-95ec-e00a01b2c241 cbdc66da-9728-4af8-aada-9a5a32e4a226' # Build, Status
+forge_pr_checks() {
+  local out rc=0
+  case $FORGE in
+    azdo)
+      out=$(azo repos pr policy list --id "$(forge_pr_id "$1")" 2>&1) || { echo "az repos pr policy list failed: $out" >&2; return 1; }
+      jq -r --arg types "$AZDO_CHECK_TYPES" '
+        ($types | split(" ")) as $ct
+        | map(select(.configuration.isEnabled != false)) as $all
+        | ($all | map(select(.configuration.type.id as $t | $ct | index($t)))) as $checks
+        | ($all - $checks | map(select(.status != "approved" and .status != "notApplicable"))) as $other
+        | (if ($checks | length) == 0 then "NONE"
+           elif any($checks[]; .status == "rejected" or .status == "broken") then "FAIL"
+           elif all($checks[]; .status == "approved" or .status == "notApplicable") then "PASS"
+           else "PENDING" end),
+          ($checks[] | "  \(.status): \(.configuration.settings.displayName // .configuration.type.displayName // "check")\(if .configuration.isBlocking then "" else " (optional)" end)"),
+          ($other[] | "  not a check, \(.status): \(.configuration.type.displayName // "policy")\(if .configuration.isBlocking then " (required)" else "" end)")
+      ' <<<"$out" ;;
+    *)
+      out=$(gh pr checks "$1" 2>&1) || rc=$?
+      if [ $rc = 0 ]; then echo PASS
+      elif grep -qi 'no checks reported' <<<"$out"; then echo NONE
+      elif [ $rc = 8 ]; then echo PENDING # gh: checks still pending
+      else echo FAIL; fi
+      printf '%s\n' "$out" | sed 's/^/  /' ;;
+  esac
+}
+
+# forge_pr_watch <url> <interval>: wait for the PR's checks to finish, showing
+# progress, and set FORGE_RESULT to PASS or FAIL. A PR with no checks after
+# about two minutes counts as PASS, with a note. GitHub: gh pr checks --watch.
+# Azure DevOps: forge_pr_checks every <interval> seconds, for up to
+# PR_WATCH_TIMEOUT seconds (default 3 hours; then FAIL, with a note).
+FORGE_RESULT=''
+# shellcheck disable=SC2034 # FORGE_RESULT: read by pr-watch.sh
+forge_pr_watch() {
+  local url=$1 interval=$2 tries i out res none=0 waited=0 timeout=${PR_WATCH_TIMEOUT:-10800}
+  tries=$(( 120 / interval )); [ "$tries" -ge 1 ] || tries=1
+  FORGE_RESULT=FAIL
+  if [ "$FORGE" != azdo ]; then
+    # New PRs may have no checks registered yet: wait up to ~2 minutes for some.
+    for ((i = 0; i < tries; i++)); do
+      out=$(gh pr checks "$url" 2>&1) && break
+      if grep -qi 'no checks reported' <<<"$out"; then none=1; sleep "$interval"; continue; fi
+      none=0; break
+    done
+    if [ $none = 1 ] && grep -qi 'no checks reported' <<<"${out:-}"; then
+      echo "Note: no checks reported for $url."
+      FORGE_RESULT=PASS; return 0
+    fi
+    if gh pr checks "$url" --watch --interval "$interval"; then FORGE_RESULT=PASS; fi
+    return 0
+  fi
+  local last=''
+  while :; do
+    if out=$(forge_pr_checks "$url"); then
+      res=$(head -n1 <<<"$out")
+      [ "$out" = "$last" ] || { echo "Checks: $out"; last=$out; }
+      case $res in
+        PASS) FORGE_RESULT=PASS; return 0 ;;
+        FAIL) return 0 ;;
+        NONE) if [ "$waited" -ge 120 ] || [ "$waited" -ge "$timeout" ]; then echo "Note: no checks (Build or Status policies) for $url."; FORGE_RESULT=PASS; return 0; fi ;;
+      esac
+    fi
+    if [ "$waited" -ge "$timeout" ]; then echo "Note: checks still not done after ${timeout}s on $url: counted as failed."; return 0; fi
+    sleep "$interval"; waited=$((waited + interval))
+  done
+}
+
+# default_target <root>: origin/HEAD's branch; else, on Azure DevOps (az
+# installed), the repo's default branch there; else main.
+default_target() {
+  local t f r; t=$(git -C "$1" symbolic-ref --short -q refs/remotes/origin/HEAD 2>/dev/null || true)
+  t=${t#origin/}
+  if [ -z "$t" ] && read -r f r < <(forge_detect "$1") && [ "$f" = azdo ] && command -v az >/dev/null 2>&1; then
+    t=$( (forge_use "$f" "$r"; azr repos show 2>/dev/null | jq -r '.defaultBranch // "" | sub("^refs/heads/"; "")' 2>/dev/null) || true)
+  fi
+  echo "${t:-main}"
+}
+
+# shellcheck disable=SC2034 # used by the scripts that source lib.sh
+ATTRIBUTION='🤖 Generated with [Claude Code](https://claude.com/claude-code)'
+
+# --- how a task lands: a local merge, or a PR into its base -------------------
+# tasks/<slug>.land holds "merge" or "pr", decided by new-task.sh: --land, else
+# state's land= (start.sh --land; "auto" or none = by base), else by base:
+# the repo's default branch (default_target) with a GitHub or Azure DevOps
+# origin (forge_detect) -> pr, any other base -> merge. Tasks from before this have no .land: merge.
+land_by_base() { # land_by_base <root> <base>: pr or merge
+  if [ "$2" = "$(default_target "$1")" ] && forge_detect "$1" >/dev/null; then echo pr; else echo merge; fi
+}
+
+task_land() { # task_land <slug>: merge or pr
+  local l; l=$(head -n1 "$(state_dir)/tasks/$1.land" 2>/dev/null || true)
+  [ "$l" = pr ] && echo pr || echo merge
+}
+
+# tasks/<slug>.pr (land-task.sh) holds key=value lines: url=, number=, base=,
+# forge= (github or azdo; none = github), repo= (FORGE_REPO), created=, state= (last seen: OPEN, MERGED,
+# CLOSED), checks= (pr-watch.sh: PASS or FAIL), merge_commit= once merged,
+# and ws_repo=<repo> in workspace mode.
+task_pr_file() { echo "$(state_dir)/tasks/$1.pr"; } # task_pr_file <slug>
+
+report_summary() { # report_summary <file>: its Summary: line, else its first text line, else "(no report)"
+  local f=$1 s=
+  if [ -f "$f" ]; then
+    s=$(sed -n 's/^[[:space:]]*\**Summary:\**[[:space:]]*//p' "$f" | head -n1)
+    [ -n "$s" ] || s=$(grep -v -e '^[[:space:]]*$' -e '^[[:space:]]*#' "$f" | head -n1)
+  fi
+  s=$(printf '%s' "$s" | tr '\r\n|' '   ' | tr -s ' ' | sed 's/ *$//' | cut -c1-160)
+  echo "${s:-(no report)}"
+}
 
 check_slug() {
   [[ "${1:-}" =~ ^[a-z0-9][a-z0-9._-]*$ ]] || die "slug must be lowercase letters, digits, . _ - (got '${1:-}')"
