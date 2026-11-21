@@ -2,7 +2,9 @@
 # doctor.sh [--quiet] — check the external tools rex-coordinator needs.
 # Required: rex, git (>= 2.31 for --path-format), jq, bash, tsk >= 0.14.1
 # (an unparsable tsk version only warns). Notes, never failures: the tsk-cli
-# skill not installed, a local-scope plugin enable.
+# skill not installed, a local-scope plugin enable, and a repo whose origin is
+# on GitHub or Azure DevOps without that forge's CLI (gh; az with the
+# azure-devops extension), which only the PR features need.
 # Exit 1 if a required one is missing. Needs nothing but bash itself (no jq).
 # --quiet: print only what is missing (to stderr).
 set -uo pipefail
@@ -43,10 +45,34 @@ local_enable_note() { # local_enable_note <main checkout>
     notes+=("$root/.claude/settings.local.json enables $id at local scope, so Claude Code adds an install record for every worker worktree. With the user-scope install enabled it is not needed: in $root run 'claude plugin uninstall $id --scope local --keep-data' (removes only that enable and the main checkout's local record), then $(cd "$(dirname "$0")" && pwd)/plugin-records.sh --fix for old worktree records")
   fi
 }
+# The forge CLI the PR features (land-task.sh, finish-feature.sh) would use,
+# from origin's URL (lib.sh's forge_parse does it fully; a host match is enough).
+# One note per missing CLI. The extension check looks for its folder: az
+# itself is slow.
+forge_seen=' '
+forge_note() { # forge_note <main checkout>
+  local url name=${1##*/}
+  url=$(git -C "$1" config --get remote.origin.url 2>/dev/null) || return 0
+  case $url in
+    *github.com[:/]*)
+      case $forge_seen in *" gh "*) return 0 ;; esac
+      command -v gh >/dev/null 2>&1 && return 0
+      forge_seen+="gh "
+      notes+=("$name's origin is on GitHub, but gh (the GitHub CLI) is not installed: only needed for PRs (land-task.sh, finish-feature.sh): https://cli.github.com") ;;
+    *dev.azure.com[:/]*|*.visualstudio.com[:/]*)
+      case $forge_seen in *" az "*) return 0 ;; esac
+      forge_seen+="az "
+      if ! command -v az >/dev/null 2>&1; then
+        notes+=("$name's origin is on Azure DevOps, but az (the Azure CLI) is not installed: only needed for PRs (land-task.sh, finish-feature.sh): https://aka.ms/azure-cli, then az extension add --name azure-devops")
+      elif [ ! -d "${AZURE_EXTENSION_DIR:-${AZURE_CONFIG_DIR:-$HOME/.azure}/cliextensions}/azure-devops" ]; then
+        notes+=("$name's origin is on Azure DevOps, but az has no azure-devops extension: only needed for PRs (land-task.sh, finish-feature.sh): az extension add --name azure-devops")
+      fi ;;
+  esac
+}
 if common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
-  local_enable_note "${common%/*}"
+  local_enable_note "${common%/*}"; forge_note "${common%/*}"
 else
-  for d in "$PWD"/*/; do d=${d%/}; [ -e "$d/.git" ] && local_enable_note "$d"; done
+  for d in "$PWD"/*/; do d=${d%/}; [ -e "$d/.git" ] && { local_enable_note "$d"; forge_note "$d"; }; done
 fi
 
 if [ "$quiet" = 0 ]; then

@@ -19,7 +19,7 @@
 # "<repo>.<feature>"; a linked task may be the workspace's or the repo's own.
 # Landing (tasks/<slug>.land): --land pr|merge, else state's land= (start.sh
 # --land), else by base (land_by_base: a PR when the base is the repo's
-# default branch and origin is GitHub, else a local merge). In pr mode the
+# default branch and origin is on GitHub or Azure DevOps, else a local merge). In pr mode the
 # brief's <!-- pr --> lines stay: the branch becomes a PR (land-task.sh).
 source "$(dirname "$0")/lib.sh"
 require_coordinator
